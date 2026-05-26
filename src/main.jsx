@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   BarChart3,
@@ -80,6 +81,12 @@ const nav = [
 const mobileNavItems = nav.filter(([id]) => ['dashboard', 'shifts', 'calendar', 'reports', 'settings'].includes(id));
 
 let runtimePreferences = defaultAppSettings.preferences;
+
+const createId = (prefix = 'id') => {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
+  const random = Math.random().toString(36).slice(2, 10);
+  return `${prefix}-${Date.now().toString(36)}-${random}`;
+};
 
 const localeFor = (language = runtimePreferences.language) => ({
   English: 'en-US',
@@ -549,9 +556,12 @@ function App() {
 
   const saveShift = async (shift) => {
     const normalizedShift = { ...shift, title: String(shift.title || '').trim(), currency: shift.currency || currencySettings.defaultCurrency };
+    if (!normalizedShift.jobId || !jobs.some((job) => job.id === normalizedShift.jobId)) {
+      throw new Error('Please select a saved job before saving this shift.');
+    }
     const savedShift = shift.id
       ? normalizedShift
-      : { ...normalizedShift, id: crypto.randomUUID(), status: 'Recorded' };
+      : { ...normalizedShift, id: createId('shift'), status: 'Recorded' };
     const nextShifts = shift.id
       ? shifts.map((item) => item.id === shift.id ? savedShift : item)
       : [savedShift, ...shifts];
@@ -560,8 +570,12 @@ function App() {
       setSyncStatus('Saving...');
       const { error } = await supabase.from('shifts').upsert(toShiftRow(savedShift, user.id));
       setSyncStatus(error ? error.message : 'Synced');
+      if (error) throw new Error(error.message);
     }
-    if (!syncEnabled && localUser) await saveLocalData('shifts', nextShifts);
+    if (!syncEnabled && localUser) {
+      await saveLocalData('jobs', jobs);
+      await saveLocalData('shifts', nextShifts);
+    }
     setPage('shifts');
     setEditingShift(null);
   };
@@ -598,6 +612,9 @@ function App() {
   };
 
   const saveTemplate = async (template) => {
+    if (!template.jobId || !jobs.some((job) => job.id === template.jobId)) {
+      throw new Error('Please select a saved job before saving this template.');
+    }
     const savedTemplate = template.id
       ? template
       : { ...template, id: template.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `template-${Date.now()}` };
@@ -609,8 +626,12 @@ function App() {
       setSyncStatus('Saving...');
       const { error } = await supabase.from('shift_templates').upsert(toTemplateRow(savedTemplate, user.id));
       setSyncStatus(error ? error.message : 'Synced');
+      if (error) throw new Error(error.message);
     }
-    if (!syncEnabled && localUser) await saveLocalData('templates', nextTemplates);
+    if (!syncEnabled && localUser) {
+      await saveLocalData('jobs', jobs);
+      await saveLocalData('templates', nextTemplates);
+    }
   };
 
   const deleteTemplate = async (id) => {
@@ -1068,7 +1089,7 @@ function Dashboard({ jobs, shifts, stats, navigate, editShift, currency, user })
   const jobsOverviewShifts = jobsPeriod === 'all' ? shifts : filterByRange(shifts, jobsPeriod);
   return (
     <>
-      <Header title={`Good morning, ${userDisplayName(user)}!`} subtitle="Here's an overview of your shifts across all jobs.">
+      <Header title="Dashboard" subtitle="Here's an overview of your shifts across all jobs.">
         <div className="date-filter">
           <CalendarDays size={18} />
           <select value={dashboardRange} onChange={(event) => setDashboardRange(event.target.value)} aria-label="Dashboard date range">
@@ -1656,6 +1677,7 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
     tags: [],
     displayTime: ''
   });
+  const [saveError, setSaveError] = useState('');
 
   useEffect(() => {
     setForm(template || {
@@ -1677,6 +1699,13 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const tagsValue = (form.tags || []).join(', ');
   const job = jobs.find((item) => item.id === form.jobId) || fallbackJob;
+  const submitTemplate = async () => {
+    try {
+      await save({ ...form, displayTime: form.displayTime || undefined });
+    } catch (error) {
+      setSaveError(error?.message || 'The template could not be saved. Please try again.');
+    }
+  };
 
   if (!open) {
     return (
@@ -1721,8 +1750,15 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
         </div>
         <div className="form-actions">
           <button className="ghost" onClick={cancel}>Cancel</button>
-          <button className="primary" disabled={jobs.length === 0} onClick={() => save({ ...form, displayTime: form.displayTime || undefined })}><Check size={18} /> Save Template</button>
+          <button className="primary" disabled={jobs.length === 0} onClick={submitTemplate}><Check size={18} /> Save Template</button>
         </div>
+        {saveError && (
+          <NoticeModal
+            title="Could not save template"
+            message={saveError}
+            cancel={() => setSaveError('')}
+          />
+        )}
       </div>
     </Panel>
   );
@@ -1739,13 +1775,16 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
   const [addingTag, setAddingTag] = useState(false);
   const [showJobRequiredModal, setShowJobRequiredModal] = useState(() => jobs.length === 0 && !shift);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const job = jobs.find((item) => item.id === form.jobId) || fallbackJob;
   const breakdown = payBreakdown(job, form, preferences);
   const hours = breakdown.hours;
 
   useEffect(() => {
-    if (jobs.length > 0) setShowJobRequiredModal(false);
-  }, [jobs.length]);
+    if (jobs.length === 0) return;
+    setShowJobRequiredModal(false);
+    setForm((current) => jobs.some((item) => item.id === current.jobId) ? current : { ...current, jobId: jobs[0].id });
+  }, [jobs]);
 
   const update = (field, value) => setForm((current) => ({ ...current, [field]: value }));
   const updateStart = (value) => {
@@ -1782,6 +1821,24 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
       notes: template.notes,
       tags: template.tags
     }));
+  };
+  const friendlySaveError = (error) => {
+    const message = error?.message || 'The shift could not be saved. Please try again.';
+    if (message.toLowerCase().includes('foreign key')) {
+      return 'This shift needs a saved job. Please save or select a job, then try again.';
+    }
+    return message;
+  };
+  const submitShift = async (nextForm) => {
+    if (!nextForm.jobId) {
+      setShowJobRequiredModal(true);
+      return;
+    }
+    try {
+      await save(nextForm);
+    } catch (error) {
+      setSaveError(friendlySaveError(error));
+    }
   };
   return (
     <>
@@ -1854,7 +1911,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
               </div>
             </div>
           </div>
-          <div className="form-actions"><button className="ghost" onClick={cancel}>Cancel</button><button className="ghost" disabled={jobs.length === 0} onClick={() => save({ ...form, id: null })}>Save & Add Another</button><button className="primary" disabled={jobs.length === 0} onClick={() => save(form)}><Check size={18} /> Save Shift</button></div>
+          <div className="form-actions"><button className="ghost" onClick={cancel}>Cancel</button><button className="ghost" disabled={jobs.length === 0 || !form.jobId} onClick={() => submitShift({ ...form, id: null })}>Save & Add Another</button><button className="primary" disabled={jobs.length === 0 || !form.jobId} onClick={() => submitShift(form)}><Check size={18} /> Save Shift</button></div>
         </section>
         <aside className="panel summary-panel">
           <h2>Shift Summary</h2><JobName job={job} />
@@ -1881,6 +1938,13 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
             addJob();
           }}
           message="Shifts need a job before they can be saved. Add your first job now, then you can record shifts, hours, and earnings against it."
+        />
+      )}
+      {saveError && (
+        <NoticeModal
+          title="Could not save shift"
+          message={saveError}
+          cancel={() => setSaveError('')}
         />
       )}
     </>
@@ -1977,6 +2041,31 @@ function JobRequiredModal({ cancel, addJob, message = 'Templates need a job befo
         <div className="modal-actions">
           <button className="ghost" onClick={cancel}>Cancel</button>
           <button className="primary" onClick={addJob}><Plus size={18} /> Add Job</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function NoticeModal({ title, message, cancel }) {
+  const modalRef = useRef(null);
+
+  useEffect(() => {
+    const closeFromOutside = (event) => {
+      if (!modalRef.current?.contains(event.target)) cancel();
+    };
+    document.addEventListener('pointerdown', closeFromOutside, true);
+    return () => document.removeEventListener('pointerdown', closeFromOutside, true);
+  }, [cancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section ref={modalRef} className="confirm-modal setup-modal" role="dialog" aria-modal="true" aria-labelledby="notice-title">
+        <div className="icon-tile"><AlertTriangle size={24} /></div>
+        <h2 id="notice-title">{title}</h2>
+        <p>{message}</p>
+        <div className="modal-actions">
+          <button className="primary" onClick={cancel}>OK</button>
         </div>
       </section>
     </div>
@@ -2219,7 +2308,7 @@ function Upcoming({ jobs, shifts, compact, detail = 'type' }) {
 
 function JobCard({ job, shifts, select, currency = 'USD' }) {
   const hours = jobHours(job.id, shifts);
-  return <section className="job-card" style={{ borderTopColor: job.color }}><div className="job-card-head"><JobName job={job} /><Badge green>Active</Badge><MoreVertical size={18} /></div><div className="metric-pair"><div><strong>{money(job.rate, currency)}</strong><span>Hourly Rate</span></div><div><strong>{job.payType}</strong><span>Pay Type</span></div><div><strong>{fmtHours(hours / 8)}</strong><span>This Week</span></div><div><strong>{fmtHours(hours)}</strong><span>This Month</span></div></div><button className="outline-action" style={{ color: job.color }} onClick={select}>View Details <ArrowRight size={17} /></button></section>;
+  return <section className="job-card" style={{ borderTopColor: job.color }}><div className="job-card-head"><JobName job={job} /><Badge green>Active</Badge></div><div className="metric-pair"><div><strong>{money(job.rate, currency)}</strong><span>Hourly Rate</span></div><div><strong>{job.payType}</strong><span>Pay Type</span></div><div><strong>{fmtHours(hours / 8)}</strong><span>This Week</span></div><div><strong>{fmtHours(hours)}</strong><span>This Month</span></div></div><button className="outline-action" style={{ color: job.color }} onClick={select}>View Details <ArrowRight size={17} /></button></section>;
 }
 
 function DayCell({ date, viewDate, jobs, shifts, selected, onSelect }) {

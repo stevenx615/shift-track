@@ -136,7 +136,7 @@ nav button.active { background: linear-gradient(95deg, rgba(62, 102, 255, .82), 
 .mobile-menu { display: none; }
 .bottom-nav { display: none; }
 .page-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-bottom: 24px; }
-h1 { margin: 0 0 6px; font-size: 31px; letter-spacing: 0; line-height: 1.15; }
+h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: 0; line-height: 1.15; }
 h2 { margin: 0; font-size: 18px; }
 h3, p { margin: 0; }
 .page-head p { color: var(--muted); font-size: 14px; }
@@ -264,7 +264,7 @@ h3, p { margin: 0; }
 
 .job-card-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; margin-bottom: 24px; }
 .job-card { padding: 20px; border-top: 2px solid; }
-.job-card-head { display: grid; grid-template-columns: 1fr auto auto; align-items: center; gap: 10px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+.job-card-head { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
 .metric-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 18px 0; }
 .metric-pair div { border-right: 1px solid var(--line); }
 .metric-pair div:nth-child(2n) { border-right: 0; }
