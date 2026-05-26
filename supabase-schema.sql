@@ -7,7 +7,7 @@ create table if not exists public.profiles (
 );
 
 create table if not exists public.jobs (
-  id text primary key,
+  id text not null,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
   employer text,
@@ -18,13 +18,14 @@ create table if not exists public.jobs (
   bg text not null default '#dbeafe',
   active boolean not null default true,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key (user_id, id)
 );
 
 create table if not exists public.shifts (
-  id text primary key,
+  id text not null,
   user_id uuid not null references auth.users(id) on delete cascade,
-  job_id text not null references public.jobs(id) on delete cascade,
+  job_id text not null,
   title text,
   date date not null,
   start_time time,
@@ -36,15 +37,17 @@ create table if not exists public.shifts (
   location text,
   currency text not null default 'USD',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key (user_id, id),
+  foreign key (user_id, job_id) references public.jobs(user_id, id) on delete cascade
 );
 
 create table if not exists public.shift_templates (
-  id text primary key,
+  id text not null,
   user_id uuid not null references auth.users(id) on delete cascade,
   name text not null,
   description text,
-  job_id text not null references public.jobs(id) on delete cascade,
+  job_id text not null,
   title text,
   start_time time,
   end_time time,
@@ -55,7 +58,9 @@ create table if not exists public.shift_templates (
   tags text[] not null default '{}',
   display_time text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  primary key (user_id, id),
+  foreign key (user_id, job_id) references public.jobs(user_id, id) on delete cascade
 );
 
 create table if not exists public.app_settings (

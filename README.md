@@ -31,7 +31,7 @@ Create `.env.local`:
 
 ```env
 VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-public-key
+VITE_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
 VITE_APP_URL=http://localhost:5173
 ```
 
@@ -63,7 +63,7 @@ Set production environment variables in your hosting provider:
 
 ```env
 VITE_SUPABASE_URL=https://your-project.supabase.co
-VITE_SUPABASE_ANON_KEY=your-anon-public-key
+VITE_SUPABASE_PUBLISHABLE_KEY=your-supabase-publishable-key
 VITE_APP_URL=https://your-deployed-site.com
 ```
 

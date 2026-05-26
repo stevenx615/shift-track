@@ -107,6 +107,7 @@ nav button.active { background: linear-gradient(95deg, rgba(62, 102, 255, .82), 
 .auth-toggle:hover { color: #1d4ed8; text-decoration: underline; }
 .google-auth { width: 100%; min-height: 46px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--control-bg); color: var(--ink); display: flex; align-items: center; justify-content: center; gap: 10px; margin-bottom: 16px; transition: background .18s ease, border-color .18s ease, transform .18s ease; animation: auth-rise .28s ease-out .08s both; }
 .google-auth:hover { background: var(--control-hover); border-color: #cbd7ff; transform: translateY(-1px); }
+.google-icon { width: 18px; height: 18px; flex: 0 0 auto; }
 .auth-divider { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; margin-bottom: 16px; }
 .auth-divider::before, .auth-divider::after { content: ""; height: 1px; background: var(--line); }
 
