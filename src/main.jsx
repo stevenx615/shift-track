@@ -79,6 +79,19 @@ const nav = [
 ];
 
 const mobileNavItems = nav.filter(([id]) => ['dashboard', 'shifts', 'calendar', 'reports', 'settings'].includes(id));
+const pageLabels = {
+  dashboard: 'Dashboard',
+  shifts: 'Shifts',
+  jobs: 'Jobs',
+  templates: 'Templates',
+  calendar: 'Calendar',
+  reports: 'Reports',
+  settings: 'Settings',
+  addShift: 'Add Shift',
+  addJob: 'Add Job'
+};
+
+const returnTargetLabel = (target, fallback) => pageLabels[target?.page] || fallback;
 
 let runtimePreferences = defaultAppSettings.preferences;
 
@@ -459,6 +472,7 @@ function App() {
   const [selectedJob, setSelectedJob] = useState(null);
   const [editingShift, setEditingShift] = useState(null);
   const [editingJob, setEditingJob] = useState(null);
+  const [returnTarget, setReturnTarget] = useState(null);
   const [mobileNav, setMobileNav] = useState(false);
 
   runtimePreferences = appSettings.preferences;
@@ -551,7 +565,39 @@ function App() {
     setSelectedJob(null);
     setEditingShift(null);
     setEditingJob(null);
+    setReturnTarget(null);
     setMobileNav(false);
+  };
+
+  const makeReturnTarget = (targetPage = page) => ({
+    page: targetPage,
+    selectedJob,
+    editingShift,
+    editingJob,
+    returnTarget
+  });
+
+  const returnToTarget = (fallbackPage, overrides = {}) => {
+    const target = { ...(returnTarget || { page: fallbackPage }), ...overrides };
+    setReturnTarget(target.returnTarget || null);
+    setEditingShift(target.editingShift || null);
+    setEditingJob(target.editingJob || null);
+    setSelectedJob(target.selectedJob || null);
+    setPage(target.page || fallbackPage);
+  };
+
+  const openShiftForm = (shift = null, targetPage = page) => {
+    setReturnTarget(makeReturnTarget(targetPage));
+    setEditingShift(shift);
+    setEditingJob(null);
+    setPage('addShift');
+  };
+
+  const openJobForm = (job = null, targetPage = page) => {
+    setReturnTarget(makeReturnTarget(targetPage));
+    setEditingJob(job);
+    setEditingShift(null);
+    setPage('addJob');
   };
 
   const saveShift = async (shift) => {
@@ -576,8 +622,8 @@ function App() {
       await saveLocalData('jobs', jobs);
       await saveLocalData('shifts', nextShifts);
     }
-    setPage('shifts');
     setEditingShift(null);
+    returnToTarget('shifts');
   };
 
   const deleteShift = async (id) => {
@@ -608,7 +654,43 @@ function App() {
     }
     if (!syncEnabled && localUser) await saveLocalData('jobs', nextJobs);
     setEditingJob(null);
-    setPage('jobs');
+    returnToTarget('jobs', returnTarget?.selectedJob?.id === savedJob.id ? { selectedJob: savedJob } : {});
+  };
+
+  const deleteJob = async (id) => {
+    const nextJobs = jobs.filter((item) => item.id !== id);
+    const nextShifts = shifts.filter((item) => item.jobId !== id);
+    const nextTemplates = templates.filter((item) => item.jobId !== id);
+    setJobs(nextJobs);
+    setShifts(nextShifts);
+    setTemplates(nextTemplates);
+    if (selectedJob?.id === id) setSelectedJob(null);
+    if (syncEnabled && user) {
+      setSyncStatus('Saving...');
+      const { error: shiftError } = await supabase.from('shifts').delete().eq('job_id', id).eq('user_id', user.id);
+      const { error: templateError } = shiftError ? { error: null } : await supabase.from('shift_templates').delete().eq('job_id', id).eq('user_id', user.id);
+      const { error: jobError } = shiftError || templateError ? { error: null } : await supabase.from('jobs').delete().eq('id', id).eq('user_id', user.id);
+      const error = shiftError || templateError || jobError;
+      setSyncStatus(error ? error.message : 'Synced');
+      if (error) {
+        setJobs(jobs);
+        setShifts(shifts);
+        setTemplates(templates);
+        throw new Error(error.message);
+      }
+    }
+    if (!syncEnabled && localUser) {
+      try {
+        await saveLocalData('shifts', nextShifts);
+        await saveLocalData('templates', nextTemplates);
+        await saveLocalData('jobs', nextJobs);
+      } catch (error) {
+        setJobs(jobs);
+        setShifts(shifts);
+        setTemplates(templates);
+        throw error;
+      }
+    }
   };
 
   const saveTemplate = async (template) => {
@@ -692,6 +774,13 @@ function App() {
     applyStoredData(data);
     setSyncStatus('Local SQLite');
   };
+  const mobileBackAction = selectedJob && page === 'jobs'
+    ? { label: 'Back to Jobs', onClick: () => setSelectedJob(null) }
+    : page === 'addShift'
+      ? { label: `Back to ${returnTargetLabel(returnTarget, 'Shifts')}`, onClick: () => returnToTarget('shifts') }
+      : page === 'addJob'
+        ? { label: `Back to ${returnTargetLabel(returnTarget, 'Jobs')}`, onClick: () => returnToTarget('jobs') }
+        : null;
 
   if (syncEnabled && !loadingCloud && !session) {
     return <AuthScreen />;
@@ -705,19 +794,32 @@ function App() {
     <div className="app">
       <Sidebar page={page} navigate={navigate} stats={stats} open={mobileNav} close={() => setMobileNav(false)} user={activeUser} syncStatus={syncStatus} localMode={!syncEnabled} onLocalLogout={() => { localLogout(); setLocalUser(null); }} />
       <main className="main">
-        <button className="mobile-menu" onClick={() => setMobileNav(true)} aria-label="Open menu"><Menu size={20} /></button>
-        {page === 'dashboard' && <Dashboard jobs={jobs} shifts={shifts} stats={stats} navigate={navigate} editShift={(shift) => { setEditingShift(shift); setPage('addShift'); }} currency={currencySettings.defaultCurrency} user={user} />}
-        {page === 'shifts' && <Shifts jobs={jobs} shifts={shifts} stats={stats} add={() => { setEditingShift(null); setPage('addShift'); }} edit={(shift) => { setEditingShift(shift); setPage('addShift'); }} remove={deleteShift} currency={currencySettings.defaultCurrency} />}
-        {page === 'jobs' && !selectedJob && <Jobs jobs={jobs} shifts={shifts} stats={stats} select={setSelectedJob} addJob={() => { setEditingJob(null); setPage('addJob'); }} editJob={(job) => { setEditingJob(job); setPage('addJob'); }} currency={currencySettings.defaultCurrency} />}
-        {page === 'jobs' && selectedJob && <JobDetail job={selectedJob} jobs={jobs} shifts={shifts} back={() => setSelectedJob(null)} addShift={() => setPage('addShift')} editJob={() => { setEditingJob(selectedJob); setSelectedJob(null); setPage('addJob'); }} currency={currencySettings.defaultCurrency} />}
-        {page === 'templates' && <TemplatesPage jobs={jobs} templates={templates} saveTemplate={saveTemplate} deleteTemplate={deleteTemplate} addJob={() => { setEditingJob(null); setPage('addJob'); }} />}
-        {page === 'calendar' && <CalendarView jobs={jobs} shifts={shifts} addShift={() => { setEditingShift(null); setPage('addShift'); }} editShift={(shift) => { setEditingShift(shift); setPage('addShift'); }} />}
+        <MobileTopBar openMenu={() => setMobileNav(true)} backAction={mobileBackAction} />
+        {page === 'dashboard' && <Dashboard jobs={jobs} shifts={shifts} stats={stats} navigate={navigate} addShift={() => openShiftForm(null, 'dashboard')} editShift={(shift) => openShiftForm(shift, 'dashboard')} currency={currencySettings.defaultCurrency} user={user} />}
+        {page === 'shifts' && <Shifts jobs={jobs} shifts={shifts} stats={stats} add={() => openShiftForm(null, 'shifts')} edit={(shift) => openShiftForm(shift, 'shifts')} remove={deleteShift} currency={currencySettings.defaultCurrency} />}
+        {page === 'jobs' && !selectedJob && <Jobs jobs={jobs} shifts={shifts} stats={stats} select={setSelectedJob} addJob={() => openJobForm(null, 'jobs')} editJob={(job) => openJobForm(job, 'jobs')} deleteJob={deleteJob} currency={currencySettings.defaultCurrency} />}
+        {page === 'jobs' && selectedJob && <JobDetail job={selectedJob} jobs={jobs} shifts={shifts} back={() => setSelectedJob(null)} addShift={() => openShiftForm(null, 'jobs')} editJob={() => openJobForm(selectedJob, 'jobs')} deleteJob={deleteJob} currency={currencySettings.defaultCurrency} />}
+        {page === 'templates' && <TemplatesPage jobs={jobs} templates={templates} saveTemplate={saveTemplate} deleteTemplate={deleteTemplate} addJob={() => openJobForm(null, 'templates')} />}
+        {page === 'calendar' && <CalendarView jobs={jobs} shifts={shifts} addShift={() => openShiftForm(null, 'calendar')} editShift={(shift) => openShiftForm(shift, 'calendar')} />}
         {page === 'reports' && <Reports jobs={jobs} shifts={shifts} stats={stats} currency={currencySettings.defaultCurrency} />}
         {page === 'settings' && <SettingsView stats={stats} user={activeUser} syncStatus={syncStatus} currencySettings={currencySettings} setCurrencySettings={updateCurrencySettings} appSettings={appSettings} setAppSettings={updateAppSettings} />}
-        {page === 'addShift' && <AddShift jobs={jobs} templates={templates} shift={editingShift} save={saveShift} cancel={() => setPage('shifts')} remove={deleteShift} addJob={() => { setEditingJob(null); setPage('addJob'); }} currencySettings={currencySettings} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
-        {page === 'addJob' && <AddJob job={editingJob} save={saveJob} cancel={() => setPage('jobs')} currency={currencySettings.defaultCurrency} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
+        {page === 'addShift' && <AddShift jobs={jobs} templates={templates} shift={editingShift} save={saveShift} cancel={() => returnToTarget('shifts')} remove={deleteShift} addJob={() => openJobForm(null, 'addShift')} currencySettings={currencySettings} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
+        {page === 'addJob' && <AddJob job={editingJob} save={saveJob} cancel={() => returnToTarget('jobs')} currency={currencySettings.defaultCurrency} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
       </main>
       <MobileBottomNav page={page} navigate={navigate} />
+    </div>
+  );
+}
+
+function MobileTopBar({ openMenu, backAction }) {
+  return (
+    <div className="mobile-topbar">
+      <button className="mobile-menu" onClick={openMenu} aria-label="Open menu"><Menu size={20} /></button>
+      {backAction && (
+        <button className="ghost mobile-top-back" onClick={backAction.onClick} aria-label={backAction.label}>
+          <ArrowLeft size={24} />
+        </button>
+      )}
     </div>
   );
 }
@@ -1056,15 +1158,15 @@ function MobileBottomNav({ page, navigate }) {
   );
 }
 
-function Header({ title, subtitle, children }) {
-  return <header className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div><div className="head-actions">{children}</div></header>;
+function Header({ title, subtitle, children, className = '' }) {
+  return <header className={`page-head ${className}`.trim()}><div><h1>{title}</h1><p>{subtitle}</p></div><div className="head-actions">{children}</div></header>;
 }
 
 function StatCard({ label, value, trend, icon: Icon, tone = 'blue' }) {
   return <section className="stat-card"><div><p>{label}</p><h2>{value}</h2>{trend && <span className="trend">{trend}</span>}</div><div className={`icon-tile ${tone}`}><Icon size={25} /></div></section>;
 }
 
-function Dashboard({ jobs, shifts, stats, navigate, editShift, currency, user }) {
+function Dashboard({ jobs, shifts, stats, navigate, addShift, editShift, currency, user }) {
   const todayIso = getTodayIso();
   const [dashboardRange, setDashboardRange] = useState('week');
   const [customStart, setCustomStart] = useState(() => isoDate(startOfWeek(toDate(todayIso))));
@@ -1108,7 +1210,7 @@ function Dashboard({ jobs, shifts, stats, navigate, editShift, currency, user })
             <span>{rangeLabel(rangeStart, rangeEnd)}</span>
           )}
         </div>
-        <button className="primary mobile-head-action" onClick={() => navigate('addShift')}><Plus size={18} /> Add Shift</button>
+        <button className="primary mobile-head-action" onClick={addShift}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="stats-grid four">
         <StatCard label={`Total Hours (${rangeName})`} value={fmtHours(rangeHours)} trend={`${percentTrend(rangeHours, previousHours) >= 0 ? '↑' : '↓'} ${Math.abs(percentTrend(rangeHours, previousHours))}% from ${previousName}`} icon={Clock3} />
@@ -1205,10 +1307,12 @@ function Shifts({ jobs, shifts, stats, add, edit, remove, currency }) {
   );
 }
 
-function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
+function Jobs({ jobs, shifts, stats, select, addJob, editJob, deleteJob, currency }) {
   const [query, setQuery] = useState('');
   const [status, setStatus] = useState('all');
   const [sort, setSort] = useState('name');
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteError, setDeleteError] = useState('');
   const filteredJobs = jobs
     .filter((job) => status === 'all' || (status === 'active' ? job.active : !job.active))
     .filter((job) => !query || [job.name, job.employer, job.type, job.payType].some((value) => matchesText(String(value || ''), query)))
@@ -1229,7 +1333,7 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
         <StatCard label="Total Hours (This Month)" value={fmtHours(stats.monthHours)} trend="↑ 8% from last month" icon={CalendarDays} tone="amber" />
       </div>
       <div className="job-card-grid">
-        {filteredJobs.map((job) => <JobCard key={job.id} job={job} shifts={shifts} select={() => select(job)} currency={currency} />)}
+        {filteredJobs.map((job) => <JobCard key={job.id} job={job} shifts={shifts} select={() => select(job)} requestDelete={() => setDeleteTarget(job)} currency={currency} />)}
       </div>
       <Panel title="All Jobs" className="jobs-table-panel">
         <div className="table-tools">
@@ -1244,16 +1348,34 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
           <tbody>{filteredJobs.map((job) => <tr key={job.id}><td><JobName job={job} /></td><td>{job.employer}</td><td>{money(job.rate, currency)}</td><td><Badge tone={job.color}>{job.payType}</Badge></td><td>{fmtHours(jobHours(job.id, filterByRange(shifts, 'week')))}</td><td>{fmtHours(jobHours(job.id, filterByRange(shifts, 'month')))}</td><td><Badge green={job.active}>{job.active ? 'Active' : 'Inactive'}</Badge></td><td className="row-actions"><button onClick={() => select(job)}><Eye size={16} /></button><button onClick={() => editJob(job)}><Edit3 size={16} /></button><button><MoreVertical size={16} /></button></td></tr>)}</tbody>
         </table>
       </Panel>
+      {deleteTarget && (
+        <ConfirmJobDeleteModal
+          job={deleteTarget}
+          shiftsCount={shifts.filter((shift) => shift.jobId === deleteTarget.id).length}
+          cancel={() => setDeleteTarget(null)}
+          confirm={async () => {
+            try {
+              await deleteJob(deleteTarget.id);
+              setDeleteTarget(null);
+            } catch (error) {
+              setDeleteError(error?.message || 'The job could not be deleted. Please try again.');
+            }
+          }}
+        />
+      )}
+      {deleteError && <NoticeModal title="Could not delete job" message={deleteError} cancel={() => setDeleteError('')} />}
       <Footer />
     </>
   );
 }
 
-function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
+function JobDetail({ job, shifts, back, addShift, editJob, deleteJob, currency }) {
   const todayIso = getTodayIso();
   const [range, setRange] = useState('month');
   const [customStart, setCustomStart] = useState(() => isoDate(startOfMonth(toDate(todayIso))));
   const [customEnd, setCustomEnd] = useState(todayIso);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [rangeStart, rangeEnd] = range === 'custom'
     ? [toDate(customStart <= customEnd ? customStart : customEnd), toDate(customStart <= customEnd ? customEnd : customStart)]
     : dateRangeFor(range);
@@ -1271,9 +1393,14 @@ function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
   const previousName = range === 'custom' ? 'previous range' : `last ${range}`;
   return (
     <>
-      <button className="back-link" onClick={back}><ArrowLeft size={17} /> Back to Jobs</button>
+      <button className="back-link page-back-action" onClick={back}><ArrowLeft size={17} /> Back to Jobs</button>
       <Header title={job.name} subtitle={`${job.type}  •  ${money(job.rate, currency)} / hour`}>
-        <div className="date-filter">
+        <Badge green={job.active}>{job.active ? 'Active' : 'Inactive'}</Badge>
+        <div className="job-detail-actions">
+          <button className="ghost" onClick={editJob}><Edit3 size={18} /> Edit Job</button>
+          <button className="primary" onClick={addShift}><Plus size={18} /> Add Shift</button>
+        </div>
+        <div className="date-filter job-detail-date-filter">
           <CalendarDays size={18} />
           <select value={range} onChange={(event) => setRange(event.target.value)} aria-label="Job detail date range">
             <option value="week">This Week</option>
@@ -1291,9 +1418,6 @@ function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
             <span>{rangeLabel(rangeStart, rangeEnd)}</span>
           )}
         </div>
-        <Badge green={job.active}>{job.active ? 'Active' : 'Inactive'}</Badge>
-        <button className="ghost" onClick={editJob}><Edit3 size={18} /> Edit Job</button>
-        <button className="primary" onClick={addShift}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="stats-grid four">
         <StatCard label={`Hours (${rangeName})`} value={fmtHours(hours)} trend={`${percentTrend(hours, previousHours) >= 0 ? '↑' : '↓'} ${Math.abs(percentTrend(hours, previousHours))}% from ${previousName}`} icon={Clock3} />
@@ -1307,6 +1431,23 @@ function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
         <Panel title="Job Information"><InfoRows rows={[['Job Title', job.name], ['Employer', job.employer || '-'], ['Hourly Rate', money(job.rate, currency)], ['Pay Type', job.payType], ['Job Type', job.type || '-'], ['Status', job.active ? 'Active' : 'Inactive']]} /></Panel>
         <Panel title="Quick Stats"><InfoRows rows={[['Total Hours', fmtHours(hours)], ['Total Earnings', money(earnings, currency)], ['Total Shifts', filtered.length], ['Average Shift', fmtHours(avgShift)], ['Busiest Day', busiestDay(filtered)], ['First Shift', filtered[0]?.date ? fmtDate(filtered[0].date) : 'No shifts'], ['Last Shift', filtered.at(-1)?.date ? fmtDate(filtered.at(-1).date) : 'No shifts']]} /></Panel>
       </div>
+      <button className="danger job-detail-delete" onClick={() => setShowDeleteConfirm(true)}><Trash2 size={18} /> Delete Job</button>
+      {showDeleteConfirm && (
+        <ConfirmJobDeleteModal
+          job={job}
+          shiftsCount={allJobShifts.length}
+          cancel={() => setShowDeleteConfirm(false)}
+          confirm={async () => {
+            try {
+              await deleteJob(job.id);
+              setShowDeleteConfirm(false);
+            } catch (error) {
+              setDeleteError(error?.message || 'The job could not be deleted. Please try again.');
+            }
+          }}
+        />
+      )}
+      {deleteError && <NoticeModal title="Could not delete job" message={deleteError} cancel={() => setDeleteError('')} />}
       <Footer />
     </>
   );
@@ -1413,7 +1554,7 @@ function Reports({ jobs, shifts, stats, currency }) {
   const trendData = reportTrendData(shifts.filter((shift) => jobId === 'all' || shift.jobId === jobId), range);
   return (
     <>
-      <Header title="Reports & Statistics" subtitle="Analyze your shift performance and earnings across all jobs." />
+      <Header title="Reports & Statistics" subtitle="Analyze your shift performance and earnings across all jobs." className="compact-page-head" />
       <div className="filter-band"><span>Time Range</span><select className="control-select" value={range} onChange={(event) => setRange(event.target.value)}><option value="week">This Week</option><option value="month">This Month</option><option value="year">This Year</option></select><span>Job</span><select className="control-select" value={jobId} onChange={(event) => setJobId(event.target.value)}><option value="all">All Jobs</option>{jobs.map((job) => <option key={job.id} value={job.id}>{job.name}</option>)}</select></div>
       <div className="stats-grid five">
         <StatCard label="Total Hours" value={fmtHours(reportHours)} trend={`${rangedShifts.length} shifts`} icon={Clock3} />
@@ -1454,7 +1595,7 @@ function SettingsView({ stats, user, syncStatus, currencySettings, setCurrencySe
   };
   return (
     <>
-      <Header title="Settings" subtitle="Manage your account, preferences, and app configuration." />
+      <Header title="Settings" subtitle="Manage your account, preferences, and app configuration." className="compact-page-head" />
       <div className="settings-grid">
         <Panel title="Preferences"><ThemeMode value={toggles.darkMode ? 'dark' : 'light'} onChange={(mode) => setAppSettings((current) => ({ ...current, toggles: { ...current.toggles, darkMode: mode === 'dark' } }))} /><PreferenceRows values={preferences} update={updatePreference} rows={[['language', 'Language'], ['timezone', 'Timezone'], ['weekStart', 'Week starts on'], ['dateFormat', 'Date format'], ['timeFormat', 'Time format']]} /></Panel>
         <Panel title="Currency Settings"><CurrencySettings settings={currencySettings} setDefaultCurrency={updateDefaultCurrency} toggleCurrency={toggleCurrency} /></Panel>
@@ -1470,6 +1611,7 @@ function TemplatesPage({ jobs, templates, saveTemplate, deleteTemplate, addJob }
   const [editing, setEditing] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [showJobRequiredModal, setShowJobRequiredModal] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   const startNew = () => {
     if (jobs.length === 0) {
@@ -1494,7 +1636,7 @@ function TemplatesPage({ jobs, templates, saveTemplate, deleteTemplate, addJob }
   return (
     <>
       <Header title="Templates" subtitle="Manage presets for common shifts and fill the Add Shift form faster.">
-        <button className="primary" onClick={startNew}><Plus size={18} /> Add Template</button>
+        <button className="primary mobile-head-action" onClick={startNew}><Plus size={18} /> Add Template</button>
       </Header>
       <div className="grid two template-management">
         <Panel title="Shift Templates">
@@ -1518,7 +1660,7 @@ function TemplatesPage({ jobs, templates, saveTemplate, deleteTemplate, addJob }
                   </div>
                   <div className="row-actions">
                     <button onClick={() => startEdit(template)}><Edit3 size={16} /></button>
-                    <button onClick={() => deleteTemplate(template.id)}><Trash2 size={16} /></button>
+                    <button onClick={() => setDeleteTarget(template)}><Trash2 size={16} /></button>
                   </div>
                 </section>
               );
@@ -1542,6 +1684,21 @@ function TemplatesPage({ jobs, templates, saveTemplate, deleteTemplate, addJob }
           addJob={() => {
             setShowJobRequiredModal(false);
             addJob();
+          }}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmTemplateDeleteModal
+          template={deleteTarget}
+          job={jobs.find((item) => item.id === deleteTarget.jobId) || fallbackJob}
+          cancel={() => setDeleteTarget(null)}
+          confirm={() => {
+            deleteTemplate(deleteTarget.id);
+            if (editing?.id === deleteTarget.id) {
+              setEditing(null);
+              setShowForm(false);
+            }
+            setDeleteTarget(null);
           }}
         />
       )}
@@ -1771,6 +1928,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
   const defaultEnd = timeFromMinutes(minutesFromTime(defaultStart) + durationMinutesFor(preferences?.defaultDuration));
   const [form, setForm] = useState(shift ? { ...shift, currency: shift.currency || defaultCurrency } : { jobId: jobs[0]?.id || '', title: '', date: getTodayIso(preferences), start: defaultStart, end: defaultEnd, breakMins: defaultBreak, paidBreak: 0, currency: defaultCurrency, location: '', notes: '', tags: [] });
   const [selectedTemplate, setSelectedTemplate] = useState('');
+  const [templatesOpen, setTemplatesOpen] = useState(false);
   const [tagInput, setTagInput] = useState('');
   const [addingTag, setAddingTag] = useState(false);
   const [showJobRequiredModal, setShowJobRequiredModal] = useState(() => jobs.length === 0 && !shift);
@@ -1821,6 +1979,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
       notes: template.notes,
       tags: template.tags
     }));
+    setTemplatesOpen(false);
   };
   const friendlySaveError = (error) => {
     const message = error?.message || 'The shift could not be saved. Please try again.';
@@ -1842,28 +2001,39 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
   };
   return (
     <>
-      <Header title={shift ? 'Edit Shift' : 'Add Shift'} subtitle="Enter the job, date, and time. Add details only when you need them.">
-        <button className="ghost" onClick={cancel}><ArrowLeft size={18} /> Back to Shifts</button>
+      <Header title={shift ? 'Edit Shift' : 'Add Shift'} subtitle="Enter the job, date, and time. Add details only when you need them." className="shift-form-head">
+        <button className="ghost page-back-action" onClick={cancel}><ArrowLeft size={18} /> Back to Shifts</button>
       </Header>
       <div className="form-layout">
         <section className="panel form-panel">
-          {!shift && (
-            <div className="template-grid">
-              {templates.map((template) => {
-                const selected = selectedTemplate === template.id;
-                const templateTone = jobs.find((item) => item.id === template.jobId) || fallbackJob;
-                const Icon = template.jobId === 'delivery' ? Truck : template.jobId === 'freelance' ? Laptop : template.jobId === 'cashier' ? BriefcaseBusiness : BriefcaseBusiness;
-                return (
-                  <button key={template.id} className={selected ? 'selected' : ''} onClick={() => applyTemplate(template.id)}>
-                    <span className="template-icon" style={{ color: templateTone.color, background: templateTone.bg }}><Icon size={22} /></span>
-                    <span className="template-copy">
-                      <strong>{template.name}</strong>
-                      <small>{template.displayTime || `${fmtTime(template.start)} - ${fmtTime(template.end)}`}</small>
-                    </span>
-                    {selected && <span className="template-check"><Check size={14} /></span>}
-                  </button>
-                );
-              })}
+          {!shift && templates.length > 0 && (
+            <div className="template-picker">
+              <button type="button" className="template-picker-toggle" onClick={() => setTemplatesOpen((current) => !current)} aria-expanded={templatesOpen}>
+                <span>
+                  <strong>{selectedTemplate ? templates.find((item) => item.id === selectedTemplate)?.name : 'Templates'}</strong>
+                  <small>{selectedTemplate ? 'Template applied' : 'Choose a saved preset'}</small>
+                </span>
+                <ChevronDown size={18} />
+              </button>
+              {templatesOpen && (
+                <div className="template-grid">
+                  {templates.map((template) => {
+                    const selected = selectedTemplate === template.id;
+                    const templateTone = jobs.find((item) => item.id === template.jobId) || fallbackJob;
+                    const Icon = template.jobId === 'delivery' ? Truck : template.jobId === 'freelance' ? Laptop : template.jobId === 'cashier' ? BriefcaseBusiness : BriefcaseBusiness;
+                    return (
+                      <button key={template.id} className={selected ? 'selected' : ''} onClick={() => applyTemplate(template.id)}>
+                        <span className="template-icon" style={{ color: templateTone.color, background: templateTone.bg }}><Icon size={22} /></span>
+                        <span className="template-copy">
+                          <strong>{template.name}</strong>
+                          <small>{template.displayTime || `${fmtTime(template.start)} - ${fmtTime(template.end)}`}</small>
+                        </span>
+                        {selected && <span className="template-check"><Check size={14} /></span>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
           <Field label="Job *"><select value={form.jobId} onChange={(e) => update('jobId', e.target.value)} disabled={jobs.length === 0}>{jobs.length === 0 && <option value="">No jobs available</option>}{jobs.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>
@@ -2021,6 +2191,66 @@ function CalendarShiftModal({ date, jobs, shifts, cancel, selectShift }) {
   );
 }
 
+function ConfirmJobDeleteModal({ job, shiftsCount, cancel, confirm }) {
+  const modalRef = useRef(null);
+
+  useEffect(() => {
+    const closeFromOutside = (event) => {
+      if (!modalRef.current?.contains(event.target)) cancel();
+    };
+    document.addEventListener('pointerdown', closeFromOutside, true);
+    return () => document.removeEventListener('pointerdown', closeFromOutside, true);
+  }, [cancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section ref={modalRef} className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-job-title">
+        <div className="icon-tile danger-tile"><Trash2 size={24} /></div>
+        <h2 id="delete-job-title">Delete job?</h2>
+        <p>This will permanently remove {job.name}{shiftsCount ? ` and ${shiftsCount} related shift${shiftsCount === 1 ? '' : 's'}` : ''} from your records.</p>
+        <div className="confirm-details">
+          <span>{job.employer || job.type || 'Job'}</span>
+          <strong>{money(job.rate)}</strong>
+        </div>
+        <div className="modal-actions">
+          <button className="ghost" onClick={cancel}>Cancel</button>
+          <button className="danger solid-danger" onClick={confirm}>Delete Job</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ConfirmTemplateDeleteModal({ template, job, cancel, confirm }) {
+  const modalRef = useRef(null);
+
+  useEffect(() => {
+    const closeFromOutside = (event) => {
+      if (!modalRef.current?.contains(event.target)) cancel();
+    };
+    document.addEventListener('pointerdown', closeFromOutside, true);
+    return () => document.removeEventListener('pointerdown', closeFromOutside, true);
+  }, [cancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section ref={modalRef} className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="delete-template-title">
+        <div className="icon-tile danger-tile"><Trash2 size={24} /></div>
+        <h2 id="delete-template-title">Delete template?</h2>
+        <p>This will permanently remove the {template.name} template from your presets.</p>
+        <div className="confirm-details">
+          <span>{job.name}</span>
+          <strong>{template.displayTime || `${fmtTime(template.start)} - ${fmtTime(template.end)}`}</strong>
+        </div>
+        <div className="modal-actions">
+          <button className="ghost" onClick={cancel}>Cancel</button>
+          <button className="danger solid-danger" onClick={confirm}>Delete Template</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function JobRequiredModal({ cancel, addJob, message = 'Templates need a job before they can be created. Add your first job now, then you can build reusable shift presets for it.' }) {
   const modalRef = useRef(null);
 
@@ -2099,7 +2329,7 @@ function AddJob({ job, save, cancel, currency, preferences, toggles }) {
   return (
     <>
       <Header title={job ? 'Edit Job' : 'Add Job'} subtitle="Create a role with its pay rate, category, and tracking color.">
-        <button className="ghost" onClick={cancel}><ArrowLeft size={18} /> Back to Jobs</button>
+        <button className="ghost page-back-action" onClick={cancel}><ArrowLeft size={18} /> Back to Jobs</button>
       </Header>
       <div className="form-layout">
         <section className="panel form-panel">
@@ -2306,9 +2536,9 @@ function Upcoming({ jobs, shifts, compact, detail = 'type' }) {
   return <div className={`upcoming ${compact ? 'compact-upcoming' : ''}`}>{shifts.map((shift) => { const job = jobs.find((item) => item.id === shift.jobId) || fallbackJob; return <div key={shift.id} className={`upcoming-row ${detail === 'time' ? 'time-detail' : ''}`}><div className="date-pill">{fmtDate(shift.date, true)}</div>{detail === 'time' ? <div className="job-name"><span className="job-icon" style={{ color: job.color, background: job.bg }}><CalendarDays size={18} /></span><div><strong>{job.name}</strong><small>{fmtTime(shift.start)} - {fmtTime(shift.end)}</small></div></div> : <JobName job={job} />}{detail !== 'time' && <span>{fmtTime(shift.start)} - {fmtTime(shift.end)}</span>}<Badge tone={job.color}>{fmtHours(shiftHours(shift))}</Badge></div>; })}</div>;
 }
 
-function JobCard({ job, shifts, select, currency = 'USD' }) {
+function JobCard({ job, shifts, select, requestDelete, currency = 'USD' }) {
   const hours = jobHours(job.id, shifts);
-  return <section className="job-card" style={{ borderTopColor: job.color }}><div className="job-card-head"><JobName job={job} /><Badge green>Active</Badge></div><div className="metric-pair"><div><strong>{money(job.rate, currency)}</strong><span>Hourly Rate</span></div><div><strong>{job.payType}</strong><span>Pay Type</span></div><div><strong>{fmtHours(hours / 8)}</strong><span>This Week</span></div><div><strong>{fmtHours(hours)}</strong><span>This Month</span></div></div><button className="outline-action" style={{ color: job.color }} onClick={select}>View Details <ArrowRight size={17} /></button></section>;
+  return <section className="job-card" style={{ borderTopColor: job.color }}><div className="job-card-head"><JobName job={job} /><div className="job-card-actions"><Badge green>Active</Badge><button className="icon-button job-delete-button" onClick={requestDelete} aria-label={`Delete ${job.name}`}><Trash2 size={17} /></button></div></div><div className="metric-pair"><div><strong>{money(job.rate, currency)}</strong><span>Hourly Rate</span></div><div><strong>{job.payType}</strong><span>Pay Type</span></div><div><strong>{fmtHours(hours / 8)}</strong><span>This Week</span></div><div><strong>{fmtHours(hours)}</strong><span>This Month</span></div></div><button className="outline-action" style={{ color: job.color }} onClick={select}>View Details <ArrowRight size={17} /></button></section>;
 }
 
 function DayCell({ date, viewDate, jobs, shifts, selected, onSelect }) {
