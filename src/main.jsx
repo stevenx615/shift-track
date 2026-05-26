@@ -15,12 +15,10 @@ import {
   Edit3,
   Eye,
   FileText,
-  Filter,
   Home,
   Laptop,
   LayoutGrid,
   List,
-  MapPin,
   Menu,
   MoreVertical,
   Plus,
@@ -44,7 +42,7 @@ const defaultAppSettings = {
     language: 'English',
     timezone: 'UTC-05:00',
     weekStart: 'Monday',
-    defaultBreak: '30',
+    defaultBreak: '0',
     dateFormat: 'MMM d, yyyy',
     timeFormat: '12-hour',
     defaultDuration: '8',
@@ -78,6 +76,8 @@ const nav = [
   ['reports', 'Reports', BarChart3],
   ['settings', 'Settings', Settings]
 ];
+
+const mobileNavItems = nav.filter(([id]) => ['dashboard', 'shifts', 'calendar', 'reports', 'settings'].includes(id));
 
 let runtimePreferences = defaultAppSettings.preferences;
 
@@ -136,6 +136,25 @@ const minutesFromTime = (time) => {
 const timeFromMinutes = (minutes) => {
   const normalized = ((Math.round(minutes) % 1440) + 1440) % 1440;
   return `${String(Math.floor(normalized / 60)).padStart(2, '0')}:${String(normalized % 60).padStart(2, '0')}`;
+};
+
+const parseTimeInput = (value) => {
+  const text = String(value || '').trim().toLowerCase().replace(/\s+/g, '');
+  if (!text) return '';
+  const match = text.match(/^(\d{1,2})(?::?(\d{2}))?(a|am|p|pm)?$/);
+  if (!match) return '';
+  let hours = Number(match[1]);
+  const minutes = Number(match[2] || 0);
+  const meridiem = match[3];
+  if (minutes > 59) return '';
+  if (meridiem) {
+    if (hours < 1 || hours > 12) return '';
+    if (meridiem.startsWith('p') && hours < 12) hours += 12;
+    if (meridiem.startsWith('a') && hours === 12) hours = 0;
+  } else if (hours > 23) {
+    return '';
+  }
+  return timeFromMinutes(hours * 60 + minutes);
 };
 
 const durationMinutesFor = (hours = runtimePreferences.defaultDuration) => Math.max(0, Math.round((Number(hours) || 0) * 60));
@@ -275,6 +294,8 @@ const upcomingShifts = (shifts, limit = 5) =>
     .sort((a, b) => a.date.localeCompare(b.date) || normalizeTime(a.start).localeCompare(normalizeTime(b.start)))
     .slice(0, limit);
 
+const timePickerOptions = Array.from({ length: 96 }, (_, index) => timeFromMinutes(index * 15));
+
 const toJobRow = (job, userId) => ({
   id: job.id,
   user_id: userId,
@@ -312,7 +333,8 @@ const toShiftRow = (shift, userId) => ({
   paid_break: Number(shift.paidBreak) || 0,
   notes: shift.notes,
   status: shift.status || 'Recorded',
-  location: shift.location
+  location: shift.location,
+  currency: shift.currency || runtimePreferences.currency || defaultCurrencySettings.defaultCurrency
 });
 
 const fallbackJob = {
@@ -355,7 +377,8 @@ const fromShiftRow = (row) => ({
   paidBreak: row.paid_break || 0,
   notes: row.notes || '',
   status: row.status || 'Recorded',
-  location: row.location || ''
+  location: row.location || '',
+  currency: row.currency || runtimePreferences.currency || defaultCurrencySettings.defaultCurrency
 });
 
 const fromTemplateRow = (row) => ({
@@ -440,6 +463,11 @@ function App() {
     document.documentElement.dataset.theme = appSettings.toggles.darkMode ? 'dark' : 'light';
   }, [appSettings.toggles.darkMode]);
 
+  useEffect(() => {
+    document.body.classList.toggle('nav-lock', mobileNav);
+    return () => document.body.classList.remove('nav-lock');
+  }, [mobileNav]);
+
   const applyStoredData = (data = {}) => {
     const nextCurrencySettings = data.currencySettings || defaultCurrencySettings;
     setJobs(data.jobs || jobsSeed);
@@ -520,9 +548,10 @@ function App() {
   };
 
   const saveShift = async (shift) => {
+    const normalizedShift = { ...shift, title: String(shift.title || '').trim(), currency: shift.currency || currencySettings.defaultCurrency };
     const savedShift = shift.id
-      ? shift
-      : { ...shift, id: crypto.randomUUID(), status: 'Recorded' };
+      ? normalizedShift
+      : { ...normalizedShift, id: crypto.randomUUID(), status: 'Recorded' };
     const nextShifts = shift.id
       ? shifts.map((item) => item.id === shift.id ? savedShift : item)
       : [savedShift, ...shifts];
@@ -667,6 +696,7 @@ function App() {
         {page === 'addShift' && <AddShift jobs={jobs} templates={templates} shift={editingShift} save={saveShift} cancel={() => setPage('shifts')} remove={deleteShift} addJob={() => { setEditingJob(null); setPage('addJob'); }} currencySettings={currencySettings} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
         {page === 'addJob' && <AddJob job={editingJob} save={saveJob} cancel={() => setPage('jobs')} currency={currencySettings.defaultCurrency} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
       </main>
+      <MobileBottomNav page={page} navigate={navigate} />
     </div>
   );
 }
@@ -992,6 +1022,19 @@ function Sidebar({ page, navigate, stats, open, close, user, syncStatus, localMo
   );
 }
 
+function MobileBottomNav({ page, navigate }) {
+  return (
+    <nav className="bottom-nav" aria-label="Mobile primary navigation">
+      {mobileNavItems.map(([id, label, Icon]) => (
+        <button key={id} className={page === id ? 'active' : ''} onClick={() => navigate(id)}>
+          <Icon size={20} />
+          <span>{label}</span>
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function Header({ title, subtitle, children }) {
   return <header className="page-head"><div><h1>{title}</h1><p>{subtitle}</p></div><div className="head-actions">{children}</div></header>;
 }
@@ -1099,29 +1142,32 @@ function Shifts({ jobs, shifts, stats, add, edit, remove, currency }) {
   const recordedShifts = filtered.filter((shift) => shift.status === 'Recorded').length;
   const openEdits = filtered.filter((shift) => shift.status === 'Pending').length;
   const rangeName = { week: 'This Week', month: 'This Month', year: 'This Year', custom: 'Custom' }[rangeFilter];
+  const shiftListTitle = rangeFilter === 'custom' ? rangeLabel(rangeStart, rangeEnd) : rangeName;
   return (
     <>
       <Header title="Shifts" subtitle="Manage and review your shift records across all jobs.">
-        <label className="search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shifts, jobs, or notes..." /></label>
-        <select className="control-select" value={jobFilter} onChange={(event) => setJobFilter(event.target.value)}><option value="all">All Jobs</option>{jobs.map((job) => <option key={job.id} value={job.id}>{job.name}</option>)}</select>
-        <select className="control-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All Status</option><option>Approved</option><option>Recorded</option><option>Pending</option><option>Day Off</option></select>
-        <div className="date-filter compact-date-filter">
-          <CalendarDays size={18} />
-          <select value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)} aria-label="Shifts date range">
-            <option value="week">This Week</option>
-            <option value="month">This Month</option>
-            <option value="year">This Year</option>
-            <option value="custom">Custom</option>
-          </select>
-          {rangeFilter === 'custom' && (
-            <>
-              <input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} aria-label="Shifts custom start date" />
-              <span>to</span>
-              <input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} aria-label="Shifts custom end date" />
-            </>
-          )}
+        <button className="primary shifts-add-action" onClick={add}><Plus size={18} /> Add Shift</button>
+        <label className="search shifts-search"><Search size={18} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search shifts, jobs, or notes..." /></label>
+        <div className="shifts-filter-row">
+          <div className="date-filter compact-date-filter">
+            <CalendarDays size={18} />
+            <select value={rangeFilter} onChange={(event) => setRangeFilter(event.target.value)} aria-label="Shifts date range">
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="year">This Year</option>
+              <option value="custom">Custom</option>
+            </select>
+            {rangeFilter === 'custom' && (
+              <>
+                <input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} aria-label="Shifts custom start date" />
+                <span>to</span>
+                <input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} aria-label="Shifts custom end date" />
+              </>
+            )}
+          </div>
+          <select className="control-select" value={jobFilter} onChange={(event) => setJobFilter(event.target.value)}><option value="all">All Jobs</option>{jobs.map((job) => <option key={job.id} value={job.id}>{job.name}</option>)}</select>
+          <select className="control-select" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">All Status</option><option>Approved</option><option>Recorded</option><option>Pending</option><option>Day Off</option></select>
         </div>
-        <button className="primary" onClick={add}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="stats-grid shifts-stats">
         <StatCard label="Total Hours" value={fmtHours(filteredHours)} trend={`${filtered.length} shifts in ${rangeName}`} icon={Clock3} />
@@ -1130,7 +1176,7 @@ function Shifts({ jobs, shifts, stats, add, edit, remove, currency }) {
         <StatCard label="Recorded Shifts" value={recordedShifts} trend={`${Math.round((recordedShifts / Math.max(1, filtered.length)) * 100)}% of filtered shifts`} icon={FileText} tone="purple" />
         <StatCard label="Open Edits" value={openEdits} trend="Pending review" icon={Edit3} tone="amber" />
       </div>
-      <Panel title="All Shifts">
+      <Panel title={shiftListTitle}>
         <ShiftTable jobs={jobs} shifts={filtered} edit={edit} requestDelete={setDeleteTarget} currency={currency} />
       </Panel>
       {deleteTarget && <ConfirmDeleteModal shift={deleteTarget} job={jobs.find((job) => job.id === deleteTarget.jobId)} cancel={() => setDeleteTarget(null)} confirm={() => { remove(deleteTarget.id); setDeleteTarget(null); }} />}
@@ -1155,7 +1201,7 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
       <Header title="Jobs" subtitle="Manage your jobs and track earnings across all your roles.">
         <button className="primary" onClick={addJob}><Plus size={18} /> Add Job</button>
       </Header>
-      <div className="stats-grid four">
+      <div className="stats-grid four jobs-stats">
         <StatCard label="Active Jobs" value={jobs.length} trend="● All jobs are active" icon={CalendarDays} tone="purple" />
         <StatCard label="Total Earnings (This Month)" value={money(stats.earnings, currency)} trend="↑ 8% from last month" icon={CircleDollarSign} tone="green" />
         <StatCard label="Total Hours (This Week)" value={fmtHours(stats.weekHours)} trend="↑ 12% from last week" icon={Clock3} />
@@ -1164,7 +1210,7 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
       <div className="job-card-grid">
         {filteredJobs.map((job) => <JobCard key={job.id} job={job} shifts={shifts} select={() => select(job)} currency={currency} />)}
       </div>
-      <Panel title="All Jobs">
+      <Panel title="All Jobs" className="jobs-table-panel">
         <div className="table-tools">
           <label className="search"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search jobs..." /></label>
           <select className="control-select" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All Status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
@@ -1183,30 +1229,62 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
 }
 
 function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
-  const filtered = shifts.filter((shift) => shift.jobId === job.id);
-  const hours = jobHours(job.id, shifts);
+  const todayIso = getTodayIso();
+  const [range, setRange] = useState('month');
+  const [customStart, setCustomStart] = useState(() => isoDate(startOfMonth(toDate(todayIso))));
+  const [customEnd, setCustomEnd] = useState(todayIso);
+  const [rangeStart, rangeEnd] = range === 'custom'
+    ? [toDate(customStart <= customEnd ? customStart : customEnd), toDate(customStart <= customEnd ? customEnd : customStart)]
+    : dateRangeFor(range);
+  const [previousStart, previousEnd] = previousDateSpan(rangeStart, rangeEnd);
+  const allJobShifts = shifts.filter((shift) => shift.jobId === job.id).sort((a, b) => a.date.localeCompare(b.date));
+  const filtered = filterByDateSpan(allJobShifts, rangeStart, rangeEnd);
+  const previous = filterByDateSpan(allJobShifts, previousStart, previousEnd);
+  const hours = hoursFor(filtered);
+  const previousHours = hoursFor(previous);
   const earnings = earningsFor([job], filtered);
+  const previousEarnings = earningsFor([job], previous);
+  const avgShift = hours / Math.max(1, filtered.length);
+  const trend = range === 'custom' ? reportTrendData(filtered, 'month') : reportTrendData(filtered, range);
+  const rangeName = { week: 'This Week', month: 'This Month', year: 'This Year', custom: 'Custom' }[range];
+  const previousName = range === 'custom' ? 'previous range' : `last ${range}`;
   return (
     <>
       <button className="back-link" onClick={back}><ArrowLeft size={17} /> Back to Jobs</button>
       <Header title={job.name} subtitle={`${job.type}  •  ${money(job.rate, currency)} / hour`}>
-        <Badge green>Active</Badge><button className="ghost" onClick={editJob}><Edit3 size={18} /> Edit Job</button><button className="primary" onClick={addShift}><Plus size={18} /> Add Shift</button><button className="icon-button"><MoreVertical size={18} /></button>
+        <div className="date-filter">
+          <CalendarDays size={18} />
+          <select value={range} onChange={(event) => setRange(event.target.value)} aria-label="Job detail date range">
+            <option value="week">This Week</option>
+            <option value="month">This Month</option>
+            <option value="year">This Year</option>
+            <option value="custom">Custom</option>
+          </select>
+          {range === 'custom' ? (
+            <>
+              <input type="date" value={customStart} onChange={(event) => setCustomStart(event.target.value)} aria-label="Job custom start date" />
+              <span>to</span>
+              <input type="date" value={customEnd} onChange={(event) => setCustomEnd(event.target.value)} aria-label="Job custom end date" />
+            </>
+          ) : (
+            <span>{rangeLabel(rangeStart, rangeEnd)}</span>
+          )}
+        </div>
+        <Badge green={job.active}>{job.active ? 'Active' : 'Inactive'}</Badge>
+        <button className="ghost" onClick={editJob}><Edit3 size={18} /> Edit Job</button>
+        <button className="primary" onClick={addShift}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="stats-grid four">
-        <StatCard label="Hours This Week" value="16h 30m" trend="↑ 8% from last week" icon={Clock3} />
-        <StatCard label="Hours This Month" value={fmtHours(hours)} trend="↑ 12% from last month" icon={Clock3} tone="green" />
-        <StatCard label="Earnings This Month" value={money(earnings, currency)} trend="Includes overtime rules" icon={CircleDollarSign} tone="purple" />
-        <StatCard label="Average Shift Length" value={fmtHours(hours / Math.max(1, filtered.length))} trend="↓ 5m from last month" icon={Clock3} tone="amber" />
+        <StatCard label={`Hours (${rangeName})`} value={fmtHours(hours)} trend={`${percentTrend(hours, previousHours) >= 0 ? '↑' : '↓'} ${Math.abs(percentTrend(hours, previousHours))}% from ${previousName}`} icon={Clock3} />
+        <StatCard label={`Earnings (${rangeName})`} value={money(earnings, currency)} trend={`${percentTrend(earnings, previousEarnings) >= 0 ? '↑' : '↓'} ${Math.abs(percentTrend(earnings, previousEarnings))}% from ${previousName}`} icon={CircleDollarSign} tone="green" />
+        <StatCard label={`Shifts (${rangeName})`} value={filtered.length} trend={`${filtered.length - previous.length >= 0 ? '↑' : '↓'} ${Math.abs(filtered.length - previous.length)} from ${previousName}`} icon={CalendarDays} tone="purple" />
+        <StatCard label="Average Shift Length" value={fmtHours(avgShift)} trend={`${filtered.length} shifts counted`} icon={Clock3} tone="amber" />
       </div>
       <div className="grid job-detail-grid">
-        <Panel title="Hours Trend (May 2026)" action="This Month"><LineChart values={monthTrend(filtered).map((item) => item.hours)} labels={monthTrend(filtered).map((item) => item.label)} /></Panel>
-        <Panel title="Hours Breakdown" action="By Day of Week"><JobBreakdown color={job.color} /></Panel>
-        <Panel title="Job Information"><InfoRows rows={[['Job Title', job.name], ['Employer', job.employer], ['Hourly Rate', money(job.rate, currency)], ['Job Type', job.type], ['Status', 'Active'], ['Added On', 'Mar 12, 2026']]} /></Panel>
-      </div>
-      <div className="grid three">
-        <Panel title="Recent Shifts"><ShiftTable jobs={[job]} shifts={filtered.slice(0, 5)} compact /></Panel>
-        <Panel title="Notes & Reminders" link="+ Add Note"><Notes /></Panel>
-        <Panel title="Quick Stats"><InfoRows rows={[['Total Hours (All Time)', fmtHours(hoursFor(filtered))], ['Total Earnings (All Time)', money(earnings, currency)], ['Total Shifts', filtered.length], ['First Shift', filtered.at(-1)?.date ? fmtDate(filtered.at(-1).date) : 'No shifts'], ['Last Shift', filtered[0]?.date ? fmtDate(filtered[0].date) : 'No shifts']]} /></Panel>
+        <Panel title={`Hours Trend (${rangeName})`}><LineChart values={trend.values} labels={trend.labels} /></Panel>
+        <Panel title="Hours Breakdown" action="By Day of Week"><JobBreakdown color={job.color} shifts={filtered} /></Panel>
+        <Panel title="Job Information"><InfoRows rows={[['Job Title', job.name], ['Employer', job.employer || '-'], ['Hourly Rate', money(job.rate, currency)], ['Pay Type', job.payType], ['Job Type', job.type || '-'], ['Status', job.active ? 'Active' : 'Inactive']]} /></Panel>
+        <Panel title="Quick Stats"><InfoRows rows={[['Total Hours', fmtHours(hours)], ['Total Earnings', money(earnings, currency)], ['Total Shifts', filtered.length], ['Average Shift', fmtHours(avgShift)], ['Busiest Day', busiestDay(filtered)], ['First Shift', filtered[0]?.date ? fmtDate(filtered[0].date) : 'No shifts'], ['Last Shift', filtered.at(-1)?.date ? fmtDate(filtered.at(-1).date) : 'No shifts']]} /></Panel>
       </div>
       <Footer />
     </>
@@ -1339,7 +1417,7 @@ function SettingsView({ stats, user, syncStatus, currencySettings, setCurrencySe
     <>
       <Header title="Settings" subtitle="Manage your account, preferences, and app configuration." />
       <div className="settings-grid">
-        <Panel title="Preferences"><ThemeMode value={toggles.darkMode ? 'dark' : 'light'} onChange={(mode) => setAppSettings((current) => ({ ...current, toggles: { ...current.toggles, darkMode: mode === 'dark' } }))} /><PreferenceRows values={preferences} update={updatePreference} rows={[['language', 'Language'], ['timezone', 'Timezone'], ['weekStart', 'Week starts on'], ['defaultBreak', 'Default break duration'], ['dateFormat', 'Date format'], ['timeFormat', 'Time format']]} /></Panel>
+        <Panel title="Preferences"><ThemeMode value={toggles.darkMode ? 'dark' : 'light'} onChange={(mode) => setAppSettings((current) => ({ ...current, toggles: { ...current.toggles, darkMode: mode === 'dark' } }))} /><PreferenceRows values={preferences} update={updatePreference} rows={[['language', 'Language'], ['timezone', 'Timezone'], ['weekStart', 'Week starts on'], ['dateFormat', 'Date format'], ['timeFormat', 'Time format']]} /></Panel>
         <Panel title="Currency Settings"><CurrencySettings settings={currencySettings} setDefaultCurrency={updateDefaultCurrency} toggleCurrency={toggleCurrency} /></Panel>
         <Panel title="Default Shift Settings"><SettingsRows values={preferences} update={updatePreference} rows={[['defaultDuration', 'Default shift duration'], ['defaultBreak', 'Default break'], ['overtimeThreshold', 'Overtime threshold'], ['rounding', 'Rounding']]} /><Toggle label="Auto end break" on={toggles.autoEndBreak} onClick={() => toggle('autoEndBreak')} /></Panel>
         <Panel title="Jobs & Rates"><SettingsRows values={preferences} update={updatePreference} rows={[['defaultRate', 'Default hourly rate'], ['overtimeMultiplier', 'Overtime multiplier'], ['doubleTimeMultiplier', 'Double time multiplier']]} /><Toggle label="Add rate to new jobs" on={toggles.addRateToJobs} onClick={() => toggle('addRateToJobs')} /></Panel>
@@ -1432,6 +1510,119 @@ function TemplatesPage({ jobs, templates, saveTemplate, deleteTemplate, addJob }
   );
 }
 
+function TimePicker({ value, onChange, startTime, breakMins = 0, showDuration = false }) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(() => fmtTime(value));
+  const [searching, setSearching] = useState(false);
+  const wrapperRef = useRef(null);
+
+  useEffect(() => {
+    setDraft(fmtTime(value));
+  }, [value]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const close = (event) => {
+      if (!wrapperRef.current?.contains(event.target)) setOpen(false);
+    };
+    document.addEventListener('mousedown', close);
+    return () => document.removeEventListener('mousedown', close);
+  }, [open]);
+
+  const commit = (nextValue) => {
+    onChange(nextValue);
+    setDraft(fmtTime(nextValue));
+    setSearching(false);
+    setOpen(false);
+  };
+
+  const commitDraft = () => {
+    const parsed = parseTimeInput(draft);
+    if (parsed) commit(parsed);
+    else setDraft(fmtTime(value));
+  };
+
+  const quickAdjust = (minutes) => {
+    const base = value ? minutesFromTime(value) : minutesFromTime(timeFromMinutes(roundedMinutes(new Date().getHours() * 60 + new Date().getMinutes(), 15)));
+    commit(timeFromMinutes(base + minutes));
+  };
+
+  const durationHint = (option) => {
+    if (!showDuration || !startTime) return '';
+    let minutes = minutesFromTime(option) - minutesFromTime(startTime);
+    if (minutes < 0) minutes += 1440;
+    const payable = Math.max(0, minutes - (Number(breakMins) || 0));
+    return fmtHours(payable / 60);
+  };
+
+  const query = searching ? draft.trim().toLowerCase() : '';
+  const options = timePickerOptions.filter((option) => {
+    if (!query) return true;
+    return option.includes(query) || fmtTime(option).toLowerCase().includes(query);
+  });
+
+  return (
+    <div className="time-picker" ref={wrapperRef}>
+      <input
+        className="time-native"
+        type="time"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      <div className="time-combo">
+        <Clock3 size={17} />
+        <input
+          type="text"
+          value={draft}
+          inputMode="numeric"
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setSearching(true);
+            setOpen(true);
+          }}
+          onBlur={commitDraft}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitDraft();
+            }
+            if (event.key === 'Escape') setOpen(false);
+          }}
+          aria-label="Time"
+        />
+        <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearching(false); setOpen((current) => !current); }} aria-label="Choose time">
+          <ChevronDown size={16} />
+        </button>
+      </div>
+      {open && (
+        <div className="time-menu">
+          <div className="time-shortcuts">
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => commit(timeFromMinutes(roundedMinutes(new Date().getHours() * 60 + new Date().getMinutes(), 15)))}>Now</button>
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => quickAdjust(15)}>+15m</button>
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => quickAdjust(30)}>+30m</button>
+            <button type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => quickAdjust(60)}>+1h</button>
+          </div>
+          <div className="time-options">
+            {(options.length ? options : timePickerOptions).map((option) => (
+              <button
+                type="button"
+                key={option}
+                className={option === value ? 'selected' : ''}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => commit(option)}
+              >
+                <span>{fmtTime(option)}</span>
+                {showDuration && <small>{durationHint(option)}</small>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TemplateEditor({ jobs, template, open, save, cancel }) {
   const [form, setForm] = useState(template || {
     name: 'New Template',
@@ -1440,7 +1631,7 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
     title: 'New Shift',
     start: '09:00',
     end: '17:00',
-    breakMins: 30,
+    breakMins: 0,
     paidBreak: 0,
     location: '',
     notes: '',
@@ -1456,7 +1647,7 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
       title: 'New Shift',
       start: '09:00',
       end: '17:00',
-      breakMins: 30,
+      breakMins: 0,
       paidBreak: 0,
       location: '',
       notes: '',
@@ -1489,8 +1680,8 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
         <Field label="Job"><select value={form.jobId} onChange={(event) => update('jobId', event.target.value)} disabled={jobs.length === 0}>{jobs.length === 0 && <option value="">No jobs available</option>}{jobs.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>
         <Field label="Shift Title"><input value={form.title} onChange={(event) => update('title', event.target.value)} /></Field>
         <div className="form-row">
-          <Field label="Start Time"><input type="time" value={form.start} onChange={(event) => update('start', event.target.value)} /></Field>
-          <Field label="End Time"><input type="time" value={form.end} onChange={(event) => update('end', event.target.value)} /></Field>
+          <Field label="Start Time"><TimePicker value={form.start} onChange={(value) => update('start', value)} /></Field>
+          <Field label="End Time"><TimePicker value={form.end} onChange={(value) => update('end', value)} startTime={form.start} breakMins={form.breakMins} showDuration /></Field>
           <Field label="Display Text"><input value={form.displayTime || ''} placeholder="Optional, e.g. Custom" onChange={(event) => update('displayTime', event.target.value)} /></Field>
         </div>
         <div className="form-row">
@@ -1520,10 +1711,11 @@ function TemplateEditor({ jobs, template, open, save, cancel }) {
 }
 
 function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, currencySettings, preferences, toggles }) {
-  const defaultBreak = Number(preferences?.defaultBreak || runtimePreferences.defaultBreak || 30);
+  const defaultBreak = Number(preferences?.defaultBreak ?? runtimePreferences.defaultBreak ?? 0);
+  const defaultCurrency = currencySettings.defaultCurrency || defaultCurrencySettings.defaultCurrency;
   const defaultStart = '09:00';
   const defaultEnd = timeFromMinutes(minutesFromTime(defaultStart) + durationMinutesFor(preferences?.defaultDuration));
-  const [form, setForm] = useState(shift || { jobId: jobs[0]?.id || '', title: '', date: getTodayIso(preferences), start: defaultStart, end: defaultEnd, breakMins: defaultBreak, paidBreak: 0, location: '', notes: '', tags: [] });
+  const [form, setForm] = useState(shift ? { ...shift, currency: shift.currency || defaultCurrency } : { jobId: jobs[0]?.id || '', title: '', date: getTodayIso(preferences), start: defaultStart, end: defaultEnd, breakMins: defaultBreak, paidBreak: 0, currency: defaultCurrency, location: '', notes: '', tags: [] });
   const [selectedTemplate, setSelectedTemplate] = useState('');
   const [tagInput, setTagInput] = useState('');
   const [addingTag, setAddingTag] = useState(false);
@@ -1566,6 +1758,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
       end: template.end,
       breakMins: template.breakMins,
       paidBreak: template.paidBreak,
+      currency: current.currency || defaultCurrency,
       location: template.location,
       notes: template.notes,
       tags: template.tags
@@ -1573,34 +1766,36 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
   };
   return (
     <>
-      <Header title={shift ? 'Edit Shift' : 'Add Shift'} subtitle="Enter shift details below. All fields marked with * are required.">
+      <Header title={shift ? 'Edit Shift' : 'Add Shift'} subtitle="Enter the job, date, and time. Add details only when you need them.">
         <button className="ghost" onClick={cancel}><ArrowLeft size={18} /> Back to Shifts</button>
       </Header>
       <div className="form-layout">
         <section className="panel form-panel">
-          <div className="template-grid">
-            {templates.map((template) => {
-              const selected = selectedTemplate === template.id;
-              const templateTone = jobs.find((item) => item.id === template.jobId) || fallbackJob;
-              const Icon = template.jobId === 'delivery' ? Truck : template.jobId === 'freelance' ? Laptop : template.jobId === 'cashier' ? BriefcaseBusiness : BriefcaseBusiness;
-              return (
-                <button key={template.id} className={selected ? 'selected' : ''} onClick={() => applyTemplate(template.id)}>
-                  <span className="template-icon" style={{ color: templateTone.color, background: templateTone.bg }}><Icon size={22} /></span>
-                  <span className="template-copy">
-                    <strong>{template.name}</strong>
-                    <small>{template.displayTime || `${fmtTime(template.start)} - ${fmtTime(template.end)}`}</small>
-                  </span>
-                  {selected && <span className="template-check"><Check size={14} /></span>}
-                </button>
-              );
-            })}
-          </div>
+          {!shift && (
+            <div className="template-grid">
+              {templates.map((template) => {
+                const selected = selectedTemplate === template.id;
+                const templateTone = jobs.find((item) => item.id === template.jobId) || fallbackJob;
+                const Icon = template.jobId === 'delivery' ? Truck : template.jobId === 'freelance' ? Laptop : template.jobId === 'cashier' ? BriefcaseBusiness : BriefcaseBusiness;
+                return (
+                  <button key={template.id} className={selected ? 'selected' : ''} onClick={() => applyTemplate(template.id)}>
+                    <span className="template-icon" style={{ color: templateTone.color, background: templateTone.bg }}><Icon size={22} /></span>
+                    <span className="template-copy">
+                      <strong>{template.name}</strong>
+                      <small>{template.displayTime || `${fmtTime(template.start)} - ${fmtTime(template.end)}`}</small>
+                    </span>
+                    {selected && <span className="template-check"><Check size={14} /></span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
           <Field label="Job *"><select value={form.jobId} onChange={(e) => update('jobId', e.target.value)} disabled={jobs.length === 0}>{jobs.length === 0 && <option value="">No jobs available</option>}{jobs.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></Field>
-          <Field label="Shift Title *"><input value={form.title} onChange={(e) => update('title', e.target.value)} /></Field>
-          <div className="form-row"><Field label="Date *"><input type="date" value={form.date} onChange={(e) => update('date', e.target.value)} /></Field><Field label="Start Time *"><input type="time" value={form.start} onChange={(e) => updateStart(e.target.value)} /></Field><Field label="End Time *"><input type="time" value={form.end} onChange={(e) => update('end', e.target.value)} /></Field></div>
+          <div className="form-row"><Field label="Date *"><input type="date" value={form.date} onChange={(e) => update('date', e.target.value)} /></Field><Field label="Start Time *"><TimePicker value={form.start} onChange={updateStart} /></Field><Field label="End Time *"><TimePicker value={form.end} onChange={(value) => update('end', value)} startTime={form.start} breakMins={form.breakMins} showDuration /></Field></div>
           <div className="form-row"><Field label="Unpaid Break"><select value={form.breakMins} onChange={(e) => update('breakMins', Number(e.target.value))}><option value="0">0 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option><option value="60">1h 00m</option></select></Field><Field label="Paid Break"><select value={form.paidBreak} onChange={(e) => update('paidBreak', Number(e.target.value))}><option value="0">0 min</option><option value="15">15 min</option><option value="30">30 min</option><option value="45">45 min</option></select></Field></div>
           <Field label="Location"><input value={form.location} onChange={(e) => update('location', e.target.value)} /></Field>
-          <div className="form-row"><Field label="Hourly Rate"><input type="number" value={job.rate} readOnly /></Field><Field label="Currency"><select value={currencySettings.defaultCurrency} readOnly>{currencySettings.enabledCurrencies.map((code) => <option key={code}>{code}</option>)}</select></Field></div>
+          <div className="form-row"><Field label="Hourly Rate"><input type="number" value={job.rate} readOnly /></Field><Field label="Currency"><select value={form.currency || defaultCurrency} onChange={(e) => update('currency', e.target.value)}>{currencySettings.enabledCurrencies.map((code) => <option key={code} value={code}>{code}</option>)}</select></Field></div>
+          <Field label="Label (Optional)"><input value={form.title} placeholder="Closing, training, inventory..." onChange={(e) => update('title', e.target.value)} /></Field>
           <Field label="Notes"><textarea value={form.notes} onChange={(e) => update('notes', e.target.value)} /></Field>
           <div className="field">
             <span>Tags (Optional)</span>
@@ -1644,7 +1839,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
         </section>
         <aside className="panel summary-panel">
           <h2>Shift Summary</h2><JobName job={job} />
-          <InfoRows rows={[['Template', templates.find((item) => item.id === selectedTemplate)?.name || 'Custom'], ['Start Time', fmtTime(form.start)], ['End Time', fmtTime(form.end)], ['Total Time', fmtHours(hours + (Number(form.breakMins) || 0) / 60)], ['Unpaid Break', `- ${fmtHours((Number(form.breakMins) || 0) / 60)}`], ['Paid Break', `- ${fmtHours((Number(form.paidBreak) || 0) / 60)}`], ['Total Hours', fmtHours(hours)], ['Regular Hours', fmtHours(breakdown.regularHours)], ['Overtime Hours', fmtHours(breakdown.overtimeHours)], ['Double Time Hours', fmtHours(breakdown.doubleTimeHours)], ['Hourly Rate', money(job.rate, currencySettings.defaultCurrency)], ['Estimated Earnings', money(breakdown.earnings, currencySettings.defaultCurrency)], ['Date', fmtDate(form.date)], ['Location', form.location]]} />
+          <InfoRows rows={[['Template', templates.find((item) => item.id === selectedTemplate)?.name || 'Custom'], ['Start Time', fmtTime(form.start)], ['End Time', fmtTime(form.end)], ['Total Time', fmtHours(hours + (Number(form.breakMins) || 0) / 60)], ['Unpaid Break', `- ${fmtHours((Number(form.breakMins) || 0) / 60)}`], ['Paid Break', `- ${fmtHours((Number(form.paidBreak) || 0) / 60)}`], ['Total Hours', fmtHours(hours)], ['Regular Hours', fmtHours(breakdown.regularHours)], ['Overtime Hours', fmtHours(breakdown.overtimeHours)], ['Double Time Hours', fmtHours(breakdown.doubleTimeHours)], ['Hourly Rate', money(job.rate, form.currency || defaultCurrency)], ['Estimated Earnings', money(breakdown.earnings, form.currency || defaultCurrency)], ['Date', fmtDate(form.date)], ['Location', form.location]]} />
           {shift && <button className="danger" onClick={() => remove(shift.id)}><Trash2 size={18} /> Delete Shift</button>}
         </aside>
       </div>
@@ -1793,12 +1988,62 @@ function AddJob({ job, save, cancel, currency, preferences, toggles }) {
   );
 }
 
-function Panel({ title, action, link, onLinkClick, children }) {
-  return <section className="panel"><div className="panel-head"><h2>{title}</h2>{action && (React.isValidElement(action) ? action : <button className="ghost small">{action} <ChevronDown size={14} /></button>)}{link && <button className="panel-link" onClick={onLinkClick}>{link} <ArrowRight size={15} /></button>}</div>{children}</section>;
+function Panel({ title, action, link, onLinkClick, className = '', children }) {
+  return <section className={`panel ${className}`.trim()}><div className="panel-head"><h2>{title}</h2>{action && (React.isValidElement(action) ? action : <button className="ghost small">{action} <ChevronDown size={14} /></button>)}{link && <button className="panel-link" onClick={onLinkClick}>{link} <ArrowRight size={15} /></button>}</div>{children}</section>;
 }
 
 function ShiftTable({ jobs, shifts, compact, edit, requestDelete, currency = 'USD' }) {
-  return <table className={`data-table ${compact ? 'compact-table' : ''} ${edit ? 'clickable-rows' : ''}`}><thead><tr><th>Date</th><th>Job</th><th>Start Time</th><th>End Time</th>{!compact && <th>Unpaid Break</th>}<th>Duration</th>{!compact && <th>Pay Estimate</th>}<th>Status</th>{!compact && <th>Actions</th>}</tr></thead><tbody>{shifts.map((shift) => { const job = jobs.find((item) => item.id === shift.jobId) || fallbackJob; const pay = payBreakdown(job, shift); return <tr key={shift.id} onClick={() => edit?.(shift)} tabIndex={edit ? 0 : undefined} onKeyDown={(event) => { if (edit && (event.key === 'Enter' || event.key === ' ')) edit(shift); }}><td>{fmtDate(shift.date)}</td><td><JobName job={job} minimal /></td><td>{fmtTime(shift.start)}</td><td>{fmtTime(shift.end)}</td>{!compact && <td>{fmtHours(shift.breakMins / 60)}</td>}<td>{fmtHours(pay.hours)}</td>{!compact && <td>{money(pay.earnings, currency)}</td>}<td><Status status={shift.status} /></td>{!compact && <td className="row-actions"><button onClick={(event) => { event.stopPropagation(); edit?.(shift); }} aria-label="Edit shift"><Edit3 size={16} /></button><button className="delete-action" onClick={(event) => { event.stopPropagation(); requestDelete?.(shift); }} aria-label="Delete shift"><Trash2 size={16} /></button></td>}</tr>; })}</tbody></table>;
+  const shiftDateParts = (iso) => {
+    const date = toDate(iso);
+    return {
+      month: date.toLocaleDateString(localeFor(), { month: 'short' }).toUpperCase(),
+      day: String(date.getDate()).padStart(2, '0'),
+      weekday: date.toLocaleDateString(localeFor(), { weekday: 'short' })
+    };
+  };
+
+  return (
+    <>
+      <table className={`data-table shift-table-grid ${compact ? 'compact-table' : ''} ${edit ? 'clickable-rows' : ''}`}>
+        <thead><tr><th>Date</th><th>Company</th><th>Job</th><th>Start Time</th><th>End Time</th><th>Duration</th>{!compact && <th>Pay Estimate</th>}<th>Status</th>{!compact && <th>Actions</th>}</tr></thead>
+        <tbody>{shifts.map((shift) => { const job = jobs.find((item) => item.id === shift.jobId) || fallbackJob; const pay = payBreakdown(job, shift); const rowCurrency = shift.currency || currency; const company = job.employer || shift.location || '-'; return <tr key={shift.id} onClick={() => edit?.(shift)} tabIndex={edit ? 0 : undefined} onKeyDown={(event) => { if (edit && (event.key === 'Enter' || event.key === ' ')) edit(shift); }}><td>{fmtDate(shift.date)}</td><td>{company}</td><td><JobName job={job} minimal /></td><td>{fmtTime(shift.start)}</td><td>{fmtTime(shift.end)}</td><td>{fmtHours(pay.hours)}</td>{!compact && <td>{money(pay.earnings, rowCurrency)}</td>}<td><Status status={shift.status} /></td>{!compact && <td className="row-actions"><button onClick={(event) => { event.stopPropagation(); edit?.(shift); }} aria-label="Edit shift"><Edit3 size={16} /></button><button className="delete-action" onClick={(event) => { event.stopPropagation(); requestDelete?.(shift); }} aria-label="Delete shift"><Trash2 size={16} /></button></td>}</tr>; })}</tbody>
+      </table>
+      <div className="shift-card-list">
+        {shifts.map((shift) => {
+          const job = jobs.find((item) => item.id === shift.jobId) || fallbackJob;
+          const pay = payBreakdown(job, shift);
+          const date = shiftDateParts(shift.date);
+          const company = job.employer || shift.location || job.name || 'No company';
+          const rowCurrency = shift.currency || currency;
+          const location = shift.location && shift.location !== company ? shift.location : '';
+          return (
+            <button
+              key={shift.id}
+              className="shift-list-card"
+              type="button"
+              onClick={() => edit?.(shift)}
+              disabled={!edit}
+            >
+              <span className="shift-date-tile">
+                <small>{date.month}</small>
+                <strong>{date.day}</strong>
+                <em>{date.weekday}</em>
+              </span>
+              <span className="shift-card-main">
+                <span className="shift-card-title"><i style={{ background: job.color }} />{company}</span>
+                <span className="shift-card-time">{fmtTime(shift.start)} - {fmtTime(shift.end)}</span>
+                {(location || shift.notes) && <span className="shift-card-meta">{[location, shift.notes].filter(Boolean).join('  •  ')}</span>}
+              </span>
+              <span className="shift-card-totals">
+                <strong>{fmtHours(pay.hours)}</strong>
+                <small>{money(pay.earnings, rowCurrency)}</small>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
 }
 
 function JobName({ job = fallbackJob, minimal }) {
@@ -1947,7 +2192,7 @@ function DayAgenda({ date, jobs, shifts }) {
         return (
           <section key={shift.id} className="agenda-item" style={{ borderLeftColor: job?.color }}>
             <div className="agenda-time"><strong>{fmtTime(shift.start)}</strong><span>{fmtTime(shift.end)}</span></div>
-            <div><JobName job={job} /><p>{shift.title}</p><small>{shift.location}</small></div>
+            <div><JobName job={job} /><small>{shift.location}</small></div>
             <Badge tone={job?.color}>{fmtHours(shiftHours(shift))}</Badge>
           </section>
         );
@@ -1976,16 +2221,25 @@ function MiniCalendar({ viewDate, setViewDate }) {
   );
 }
 
-function JobBreakdown({ color }) {
-  return <div className="breakdown">{weekdayLabels().map((day, i) => <div key={day}><span>{day}</span><div><i style={{ width: `${90 - i * 13}%`, background: color }} /></div><b>{18 - i * 2}h 00m</b></div>)}</div>;
+function JobBreakdown({ color, shifts = [] }) {
+  const labels = weekdayLabels();
+  const totals = labels.map((day) => hoursFor(shifts.filter((shift) => toDate(shift.date).toLocaleDateString(localeFor(), { weekday: 'short' }) === day)));
+  const max = Math.max(...totals, 1);
+  return (
+    <div className="breakdown">
+      {labels.map((day, index) => (
+        <div key={day}>
+          <span>{day}</span>
+          <div><i style={{ width: `${Math.max(4, (totals[index] / max) * 100)}%`, background: color }} /></div>
+          <b>{fmtHours(totals[index])}</b>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function InfoRows({ rows }) {
   return <div className="info-rows">{rows.map(([a, b]) => <div key={a}><span>{a}</span><strong>{b}</strong></div>)}</div>;
-}
-
-function Notes() {
-  return <div className="notes">{['Key access', 'End of month reports', 'Team meeting'].map((note) => <div key={note}><Badge amber>{note.slice(0, 1)}</Badge><strong>{note}</strong><p>Prepare notes and reminders for this role.</p></div>)}</div>;
 }
 
 const preferenceOptions = {

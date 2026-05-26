@@ -1,5 +1,12 @@
 const tokenKey = 'shifttrack.localToken';
 
+const cleanAuthPayload = (payload) => ({
+  ...payload,
+  ...(payload.name !== undefined ? { name: String(payload.name).trim() } : {}),
+  ...(payload.email !== undefined ? { email: String(payload.email).trim() } : {}),
+  ...(payload.identifier !== undefined ? { identifier: String(payload.identifier).trim() } : {})
+});
+
 async function request(path, options = {}) {
   const token = localStorage.getItem(tokenKey);
   const response = await fetch(path, {
@@ -29,7 +36,7 @@ export function localToken() {
 export async function localSignup(payload) {
   const data = await request('/api/local/signup', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: JSON.stringify(cleanAuthPayload(payload))
   });
   localStorage.setItem(tokenKey, data.token);
   return data;
@@ -38,7 +45,7 @@ export async function localSignup(payload) {
 export async function localLogin(payload) {
   const data = await request('/api/local/login', {
     method: 'POST',
-    body: JSON.stringify(payload)
+    body: JSON.stringify(cleanAuthPayload(payload))
   });
   localStorage.setItem(tokenKey, data.token);
   return data;

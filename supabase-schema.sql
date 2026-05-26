@@ -34,6 +34,7 @@ create table if not exists public.shifts (
   notes text,
   status text not null default 'Recorded',
   location text,
+  currency text not null default 'USD',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
