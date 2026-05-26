@@ -690,7 +690,7 @@ function App() {
         {page === 'jobs' && !selectedJob && <Jobs jobs={jobs} shifts={shifts} stats={stats} select={setSelectedJob} addJob={() => { setEditingJob(null); setPage('addJob'); }} editJob={(job) => { setEditingJob(job); setPage('addJob'); }} currency={currencySettings.defaultCurrency} />}
         {page === 'jobs' && selectedJob && <JobDetail job={selectedJob} jobs={jobs} shifts={shifts} back={() => setSelectedJob(null)} addShift={() => setPage('addShift')} editJob={() => { setEditingJob(selectedJob); setSelectedJob(null); setPage('addJob'); }} currency={currencySettings.defaultCurrency} />}
         {page === 'templates' && <TemplatesPage jobs={jobs} templates={templates} saveTemplate={saveTemplate} deleteTemplate={deleteTemplate} addJob={() => { setEditingJob(null); setPage('addJob'); }} />}
-        {page === 'calendar' && <CalendarView jobs={jobs} shifts={shifts} addShift={() => setPage('addShift')} />}
+        {page === 'calendar' && <CalendarView jobs={jobs} shifts={shifts} addShift={() => { setEditingShift(null); setPage('addShift'); }} editShift={(shift) => { setEditingShift(shift); setPage('addShift'); }} />}
         {page === 'reports' && <Reports jobs={jobs} shifts={shifts} stats={stats} currency={currencySettings.defaultCurrency} />}
         {page === 'settings' && <SettingsView stats={stats} user={activeUser} syncStatus={syncStatus} currencySettings={currencySettings} setCurrencySettings={updateCurrencySettings} appSettings={appSettings} setAppSettings={updateAppSettings} />}
         {page === 'addShift' && <AddShift jobs={jobs} templates={templates} shift={editingShift} save={saveShift} cancel={() => setPage('shifts')} remove={deleteShift} addJob={() => { setEditingJob(null); setPage('addJob'); }} currencySettings={currencySettings} preferences={appSettings.preferences} toggles={appSettings.toggles} />}
@@ -1087,7 +1087,7 @@ function Dashboard({ jobs, shifts, stats, navigate, editShift, currency, user })
             <span>{rangeLabel(rangeStart, rangeEnd)}</span>
           )}
         </div>
-        <button className="primary" onClick={() => navigate('addShift')}><Plus size={18} /> Add Shift</button>
+        <button className="primary mobile-head-action" onClick={() => navigate('addShift')}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="stats-grid four">
         <StatCard label={`Total Hours (${rangeName})`} value={fmtHours(rangeHours)} trend={`${percentTrend(rangeHours, previousHours) >= 0 ? '↑' : '↓'} ${Math.abs(percentTrend(rangeHours, previousHours))}% from ${previousName}`} icon={Clock3} />
@@ -1199,7 +1199,7 @@ function Jobs({ jobs, shifts, stats, select, addJob, editJob, currency }) {
   return (
     <>
       <Header title="Jobs" subtitle="Manage your jobs and track earnings across all your roles.">
-        <button className="primary" onClick={addJob}><Plus size={18} /> Add Job</button>
+        <button className="primary mobile-head-action" onClick={addJob}><Plus size={18} /> Add Job</button>
       </Header>
       <div className="stats-grid four jobs-stats">
         <StatCard label="Active Jobs" value={jobs.length} trend="● All jobs are active" icon={CalendarDays} tone="purple" />
@@ -1291,9 +1291,10 @@ function JobDetail({ job, shifts, back, addShift, editJob, currency }) {
   );
 }
 
-function CalendarView({ jobs, shifts, addShift }) {
+function CalendarView({ jobs, shifts, addShift, editShift }) {
   const [viewMode, setViewMode] = useState('month');
   const [viewDate, setViewDate] = useState(() => toDate(getTodayIso()));
+  const [detailDate, setDetailDate] = useState(null);
   const [visibleJobs, setVisibleJobs] = useState(() => Object.fromEntries(jobs.map((job) => [job.id, true])));
   const monthStart = startOfMonth(viewDate);
   const monthEnd = endOfMonth(viewDate);
@@ -1327,6 +1328,11 @@ function CalendarView({ jobs, shifts, addShift }) {
   const goToday = () => {
     setViewDate(toDate(getTodayIso()));
   };
+  const selectCalendarDate = (date) => {
+    setViewDate(date);
+    const iso = isoDate(date);
+    if (visibleShifts.some((shift) => shift.date === iso)) setDetailDate(date);
+  };
   const calendarLabel = viewMode === 'month'
     ? viewDate.toLocaleDateString(localeFor(), { month: 'long', year: 'numeric' })
     : viewMode === 'week'
@@ -1336,7 +1342,7 @@ function CalendarView({ jobs, shifts, addShift }) {
     <>
       <Header title="Calendar" subtitle="View and manage your shifts. Stay organized and plan ahead.">
         <div className="segmented"><button className={viewMode === 'month' ? 'selected' : ''} onClick={() => setViewMode('month')}>Month</button><button className={viewMode === 'week' ? 'selected' : ''} onClick={() => setViewMode('week')}>Week</button><button className={viewMode === 'day' ? 'selected' : ''} onClick={() => setViewMode('day')}>Day</button></div>
-        <button className="primary" onClick={addShift}><Plus size={18} /> Add Shift</button>
+        <button className="primary mobile-head-action" onClick={addShift}><Plus size={18} /> Add Shift</button>
       </Header>
       <div className="calendar-layout">
         <aside className="filters panel">
@@ -1347,9 +1353,9 @@ function CalendarView({ jobs, shifts, addShift }) {
           <div className="calendar-toolbar"><button className="ghost" onClick={goToday}>Today</button><button className="icon-button" onClick={() => changePeriod(-1)}><ChevronLeft size={18} /></button><button className="icon-button" onClick={() => changePeriod(1)}><ChevronRight size={18} /></button><h2>{calendarLabel}</h2></div>
           {viewMode === 'month' && <div className="month-grid">
             {weekdayLabels(isoDate(viewDate)).map((d) => <b key={d}>{d}</b>)}
-            {days.map((date) => <DayCell key={isoDate(date)} date={date} viewDate={viewDate} jobs={jobs} shifts={visibleShifts} selected={isoDate(date) === isoDate(viewDate)} onSelect={() => setViewDate(date)} />)}
+            {days.map((date) => <DayCell key={isoDate(date)} date={date} viewDate={viewDate} jobs={jobs} shifts={visibleShifts} selected={isoDate(date) === isoDate(viewDate)} onSelect={() => selectCalendarDate(date)} />)}
           </div>}
-          {viewMode === 'week' && <WeekCalendar days={weekDays} jobs={jobs} shifts={visibleShifts} selectedDate={viewDate} selectDate={setViewDate} />}
+          {viewMode === 'week' && <WeekCalendar days={weekDays} jobs={jobs} shifts={visibleShifts} selectedDate={viewDate} selectDate={selectCalendarDate} />}
           {viewMode === 'day' && <DayAgenda date={viewDate} jobs={jobs} shifts={visibleShifts} />}
         </section>
         <aside className="calendar-side">
@@ -1357,6 +1363,18 @@ function CalendarView({ jobs, shifts, addShift }) {
           <Panel title="Total Scheduled Hours"><h2>{fmtHours(hoursFor(rangeShifts))}</h2><p className="panel-note">{rangeLabel(rangeStart, rangeEnd)}</p></Panel>
         </aside>
       </div>
+      {detailDate && (
+        <CalendarShiftModal
+          date={detailDate}
+          jobs={jobs}
+          shifts={visibleShifts.filter((shift) => shift.date === isoDate(detailDate)).sort((a, b) => normalizeTime(a.start).localeCompare(normalizeTime(b.start)))}
+          cancel={() => setDetailDate(null)}
+          selectShift={(shift) => {
+            setDetailDate(null);
+            editShift(shift);
+          }}
+        />
+      )}
       <Footer />
     </>
   );
@@ -1720,6 +1738,7 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
   const [tagInput, setTagInput] = useState('');
   const [addingTag, setAddingTag] = useState(false);
   const [showJobRequiredModal, setShowJobRequiredModal] = useState(() => jobs.length === 0 && !shift);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const job = jobs.find((item) => item.id === form.jobId) || fallbackJob;
   const breakdown = payBreakdown(job, form, preferences);
   const hours = breakdown.hours;
@@ -1840,9 +1859,20 @@ function AddShift({ jobs, templates, shift, save, cancel, remove, addJob, curren
         <aside className="panel summary-panel">
           <h2>Shift Summary</h2><JobName job={job} />
           <InfoRows rows={[['Template', templates.find((item) => item.id === selectedTemplate)?.name || 'Custom'], ['Start Time', fmtTime(form.start)], ['End Time', fmtTime(form.end)], ['Total Time', fmtHours(hours + (Number(form.breakMins) || 0) / 60)], ['Unpaid Break', `- ${fmtHours((Number(form.breakMins) || 0) / 60)}`], ['Paid Break', `- ${fmtHours((Number(form.paidBreak) || 0) / 60)}`], ['Total Hours', fmtHours(hours)], ['Regular Hours', fmtHours(breakdown.regularHours)], ['Overtime Hours', fmtHours(breakdown.overtimeHours)], ['Double Time Hours', fmtHours(breakdown.doubleTimeHours)], ['Hourly Rate', money(job.rate, form.currency || defaultCurrency)], ['Estimated Earnings', money(breakdown.earnings, form.currency || defaultCurrency)], ['Date', fmtDate(form.date)], ['Location', form.location]]} />
-          {shift && <button className="danger" onClick={() => remove(shift.id)}><Trash2 size={18} /> Delete Shift</button>}
+          {shift && <button className="danger" onClick={() => setShowDeleteConfirm(true)}><Trash2 size={18} /> Delete Shift</button>}
         </aside>
       </div>
+      {showDeleteConfirm && shift && (
+        <ConfirmDeleteModal
+          shift={form}
+          job={job}
+          cancel={() => setShowDeleteConfirm(false)}
+          confirm={() => {
+            setShowDeleteConfirm(false);
+            remove(shift.id);
+          }}
+        />
+      )}
       {showJobRequiredModal && (
         <JobRequiredModal
           cancel={() => setShowJobRequiredModal(false)}
@@ -1881,6 +1911,46 @@ function ConfirmDeleteModal({ shift, job, cancel, confirm }) {
         <div className="modal-actions">
           <button className="ghost" onClick={cancel}>Cancel</button>
           <button className="danger solid-danger" onClick={confirm}><Trash2 size={18} /> Delete Shift</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CalendarShiftModal({ date, jobs, shifts, cancel, selectShift }) {
+  const modalRef = useRef(null);
+
+  useEffect(() => {
+    const closeFromOutside = (event) => {
+      if (!modalRef.current?.contains(event.target)) cancel();
+    };
+    document.addEventListener('pointerdown', closeFromOutside, true);
+    return () => document.removeEventListener('pointerdown', closeFromOutside, true);
+  }, [cancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section ref={modalRef} className="confirm-modal calendar-shift-modal" role="dialog" aria-modal="true" aria-labelledby="calendar-shift-title">
+        <div className="icon-tile"><CalendarDays size={24} /></div>
+        <h2 id="calendar-shift-title">{fmtDate(isoDate(date))}</h2>
+        <p>{shifts.length} shift{shifts.length === 1 ? '' : 's'} scheduled</p>
+        <div className="calendar-shift-list">
+          {shifts.map((shift) => {
+            const job = jobs.find((item) => item.id === shift.jobId) || fallbackJob;
+            const company = job.employer || shift.location || job.name || 'No company';
+            return (
+              <button key={shift.id} type="button" className="calendar-shift-row" style={{ borderLeftColor: job.color }} onClick={() => selectShift(shift)}>
+                <div className="calendar-shift-job">
+                  <strong>{company}</strong>
+                  <span>{fmtTime(shift.start)} - {fmtTime(shift.end)}</span>
+                </div>
+                <Badge tone={job.color}>{fmtHours(shiftHours(shift))}</Badge>
+              </button>
+            );
+          })}
+        </div>
+        <div className="modal-actions">
+          <button className="primary" onClick={cancel}>Done</button>
         </div>
       </section>
     </div>
